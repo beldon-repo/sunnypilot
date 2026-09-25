@@ -40,8 +40,8 @@ class BYDPlatformConfig(PlatformConfig):
 
 
 class CAR(Platforms):
-  BYD_SONG_PLUS_DMI = BYDPlatformConfig(
-    [BYDCarDocs("BYD Song Plus DM-i 2021-24")],
+  BYD_SONG_PLUS_DMI_22 = BYDPlatformConfig(
+    [BYDCarDocs("BYD Song Plus DM-i 2022")],
     BYDCarSpecs(mass=1885, wheelbase=2.76),
   )
 
