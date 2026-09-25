@@ -30,6 +30,7 @@ class BYDCarDocs(CarDocs):
 
 @dataclass(frozen=True)
 class BYDCarSpecs(CarSpecs):
+  # specs from an independent open BYD port (Song Plus DM-i 2021-23 share these)
   centerToFrontRatio: float = 0.44
   steerRatio: float = 15.  # TODO(Song Plus DM-i): calibrate from real vehicle data
 
@@ -42,7 +43,7 @@ class BYDPlatformConfig(PlatformConfig):
 class CAR(Platforms):
   BYD_SONG_PLUS_DMI_22 = BYDPlatformConfig(
     [BYDCarDocs("BYD Song Plus DM-i 2022")],
-    BYDCarSpecs(mass=1885, wheelbase=2.76),
+    BYDCarSpecs(mass=1785, wheelbase=2.765),
   )
 
 
