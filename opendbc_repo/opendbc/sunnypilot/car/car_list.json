@@ -140,6 +140,19 @@
     ],
     "package": "Driver Confidence Package 2"
   },
+  "BYD Song Plus DM-i 2021-24": {
+    "platform": "BYD_SONG_PLUS_DMI",
+    "make": "BYD",
+    "brand": "byd",
+    "model": "Song Plus DM-i",
+    "year": [
+      "2021",
+      "2022",
+      "2023",
+      "2024"
+    ],
+    "package": "DiPilot"
+  },
   "Cadillac Escalade 2017": {
     "platform": "CADILLAC_ESCALADE",
     "make": "Cadillac",
