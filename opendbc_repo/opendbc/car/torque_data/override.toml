@@ -2,6 +2,11 @@ legend = ["LAT_ACCEL_FACTOR", "MAX_LAT_ACCEL_MEASURED", "FRICTION"]
 ### angle control
 # Nissan appears to have torque
 "NISSAN_XTRAIL" = [nan, 1.5, nan]
+
+# BYD angle based controller
+# measured MAX_LAT_ACCEL 2.5 from a commercial BYD port's torque_data (Song Plus DM-i 21-23);
+# for a future torque path: [2.5, 2.5, 0.12] (21), [2.5, 2.5, 0.10] (22/23)
+"BYD_SONG_PLUS_DMI" = [nan, 2.5, nan]
 "NISSAN_ALTIMA" = [nan, 1.5, nan]
 "NISSAN_LEAF_IC" = [nan, 1.5, nan]
 "NISSAN_LEAF" = [nan, 1.5, nan]
