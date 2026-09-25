@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from openpilot.common.params import Params
-from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
+# from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert  # hidden: unregistered-hardware alert
 from openpilot.system.hardware import PC
 from openpilot.system.hardware.hw import Paths
 
@@ -34,7 +34,8 @@ def register(show_spinner=False) -> str | None:
     dongle_id = UNREGISTERED_DONGLE_ID
 
   params.put("DongleId", dongle_id)
-  set_offroad_alert("Offroad_UnregisteredHardware", (dongle_id == UNREGISTERED_DONGLE_ID) and not PC)
+  # hidden: unregistered-hardware offroad alert
+  # set_offroad_alert("Offroad_UnregisteredHardware", (dongle_id == UNREGISTERED_DONGLE_ID) and not PC)
   return dongle_id
 
 
