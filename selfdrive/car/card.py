@@ -220,18 +220,19 @@ class Car:
     self.fwd_can_sends = []
     if self.can_forwarding:
       enabled = self.sm['carControl'].enabled
-      for addr, dat, bus in can_list:
-        if bus == 0:
-          # powertrain -> camera; skip OP's own spoofed LKA/buttons, they never
-          # echo back but guard anyway
-          if addr in (0x316, 0x3B0):
-            continue
-          self.fwd_can_sends.append((addr, dat, 2))
-        elif bus == 2:
-          # camera -> powertrain; drop the camera's LKA request while OP is engaged
-          if addr == 0x316 and enabled:
-            continue
-          self.fwd_can_sends.append((addr, dat, 0))
+      for _, frames in can_list:
+        for addr, dat, bus in frames:
+          if bus == 0:
+            # powertrain -> camera; skip OP's own spoofed LKA/buttons, they never
+            # echo back but guard anyway
+            if addr in (0x316, 0x3B0):
+              continue
+            self.fwd_can_sends.append((addr, dat, 2))
+          elif bus == 2:
+            # camera -> powertrain; drop the camera's LKA request while OP is engaged
+            if addr == 0x316 and enabled:
+              continue
+            self.fwd_can_sends.append((addr, dat, 0))
 
     can_rcv_valid = len(can_strs) > 0
 
