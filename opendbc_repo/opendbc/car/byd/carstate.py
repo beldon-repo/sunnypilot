@@ -30,13 +30,17 @@ class CarState(CarStateBase):
     self.eps_state_msg = cp.vl["ACC_EPS_STATE"]
 
     # speed
-    # vehicle speed from BSD_RADAR (verified on Song Plus DM-i: smooth 0-120+ km/h);
-    # the 0x122 wheel-speed layout does not match on Song (values implausible)
+    # Song Plus DM-i: the 0x122 wheel-speed message reads all zeros and the
+    # 0x418 BSD_RADAR VEHICLE_SPEED field is constant (~8.5), so neither is a
+    # usable speed. The real vehicle speed comes from 0x1f0 ESP_SPEED
+    # (20 Hz, bus 0) byte 4 in km/h, verified against camera odometry on real
+    # drives (regression slope ~3.6, see route logs 2-7).
+    vehicle_speed_kph = cp.vl["ESP_SPEED"]["VehicleSpeed"]
     self.parse_wheel_speeds(ret,
-      cp.vl["BSD_RADAR"]["VEHICLE_SPEED"],
-      cp.vl["BSD_RADAR"]["VEHICLE_SPEED"],
-      cp.vl["BSD_RADAR"]["VEHICLE_SPEED"],
-      cp.vl["BSD_RADAR"]["VEHICLE_SPEED"],
+      vehicle_speed_kph,
+      vehicle_speed_kph,
+      vehicle_speed_kph,
+      vehicle_speed_kph,
     )
     ret.vEgoCluster = ret.vEgo
     ret.standstill = ret.vEgoRaw < 0.05
@@ -124,6 +128,7 @@ class CarState(CarStateBase):
     pt_messages = [
       ("EPS", 100),              # 0x11f
       ("WHEEL_SPEED", 50),       # 0x122
+      ("ESP_SPEED", 20),         # 0x1f0, real vehicle speed in km/h
       ("BCM", 10),               # 0x12d
       ("STALKS", 10),            # 0x133
       ("DRIVE_STATE", 20),       # 0x242

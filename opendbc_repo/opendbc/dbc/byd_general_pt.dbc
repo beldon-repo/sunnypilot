@@ -65,6 +65,9 @@ BO_ 307 STALKS: 8 XXX
  SG_ TURN_SIGNAL_SWITCH : 36|3@1+ (1,0) [0|7] "" XXX
  SG_ Heartbeat : 63|4@0+ (1,0) [0|15] "" XXX
 
+BO_ 496 ESP_SPEED: 8 XXX
+ SG_ VehicleSpeed : 32|8@1+ (1,0) [0|255] "km/h" XXX
+
 BO_ 482 STEERING_MODULE_ADAS: 8 XXX
  SG_ STEER_ANGLE : 24|16@1- (0.1,0) [0|255] "" XXX
  SG_ COUNTER : 55|4@0+ (1,0) [0|15] "" XXX
@@ -197,6 +200,8 @@ BO_ 944 PCM_BUTTONS: 8 XXX
  SG_ CheckSum : 56|8@1+ (1,0) [0|255] "" XXX
 
 BO_ 1048 BSD_RADAR: 8 XXX
+; NOTE(Song Plus DM-i): VEHICLE_SPEED here is a constant (~8.5) and is NOT the
+; real vehicle speed; use ESP_SPEED (0x1f0) for speed instead.
  SG_ LEFT_APPROACH : 9|2@0+ (1,0) [0|1] "" XXX
  SG_ RIGHT_APPROACH : 11|2@0+ (1,0) [0|1] "" XXX
  SG_ APPROACH : 17|1@0+ (1,0) [0|1] "" XXX
