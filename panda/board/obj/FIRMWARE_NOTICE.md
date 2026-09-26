@@ -16,6 +16,13 @@ SPI 兜底死循环（`SPI: timed out waiting for ACK`）→ UI"无 PANDA"。pyt
 两个 VID 都收，故此前 python 层测试全通、唯独 UI 无 panda。详见
 `docs/byd-panda-fw-build.md` 第六节。
 
+**0x32D 总线修正（2026-09-27，app 哈希 4be260bc）**：`safety_byd.h` 的
+`pcm_cruise_check` 与 0x32D RX 检查从 bus 0 改到 bus 2（Song Plus DM-i 的
+DiPilot 相机在相机侧总线上发送 0x32D，bus 0 上永远收不到）。bus 0 上的旧检查
+超时导致 pcm_cruise_check 永远认为原厂 ACC 未激活 → pcmCruise 模式下
+controls_allowed 被强制清除，OP 无法保持发动。激活判定同步改为
+`AccState != 0 && != 7`（7 = 主开关开/待机）。
+
 ## 刷机恢复
 
 刷机/重装系统后：安装本 fork 分支（custom URL）→ OTA → pandad 签名校验
