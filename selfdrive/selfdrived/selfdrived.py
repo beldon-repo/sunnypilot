@@ -466,6 +466,10 @@ class SelfdriveD(CruiseHelper):
         if VisionStreamType.VISION_STREAM_WIDE_ROAD not in available_streams:
           self.sm.ignore_alive.append('wideRoadCameraState')
           self.sm.ignore_valid.append('wideRoadCameraState')
+        if VisionStreamType.VISION_STREAM_DRIVER not in available_streams:
+          # e.g. c3l clone boards without a driver monitoring camera
+          self.sm.ignore_alive.append('driverCameraState')
+          self.sm.ignore_valid.append('driverCameraState')
 
         if REPLAY and any(ps.controlsAllowed for ps in self.sm['pandaStates']):
           self.state_machine.state = State.enabled
