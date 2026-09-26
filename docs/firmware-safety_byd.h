@@ -169,15 +169,28 @@ static bool byd_tx_hook(const CANPacket_t *to_send) {
 }
 
 static int byd_fwd_hook(int bus_num, int addr) {
-  (void)bus_num;
-  (void)addr;
-  // Song Plus DM-i: the stock camera/radar already sit directly on the
-  // powertrain bus through the harness pass-through (proven by the vendor
-  // firmware, which does not forward either). Relaying bus0<->bus2 floods
-  // both networks with duplicate frames and faults the stock ECUs
-  // ('ACC restricted' / 'check multifunction video controller').
-  // bus 2 (private ADAS wire) is only tapped for monitoring 0x32D/0x32E.
-  return -1;
+  // Song Plus DM-i: the harness cuts the camera/radar vehicle CAN, so the
+  // ONLY path between the car and the ADAS ECUs is openpilot's relay
+  // (bus 0 <-> bus 2, done here in firmware). Disabling it starves the
+  // camera and radar ('check multifunction video controller' / 'check
+  // front millimeter-wave radar').
+  // Block our own spoofed messages from looping between the buses.
+  int bus_fwd = -1;
+
+  if (bus_num == 0) {
+    bus_fwd = 2;
+  }
+
+  if (bus_num == 2) {
+    bus_fwd = 0;
+  }
+
+  bool block_msg = (addr == 0x1E2U) || (addr == 0x316U) || (addr == 0x3B0U);
+  if (block_msg) {
+    bus_fwd = -1;
+  }
+
+  return bus_fwd;
 }
 
 static safety_config byd_init(uint16_t param) {
