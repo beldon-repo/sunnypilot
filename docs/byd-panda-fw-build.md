@@ -18,6 +18,12 @@
 
 ## 二、构建环境（Mac ARM64）
 
+> **持久化位置（2026-09-27 起）**：/tmp 重启会清空，构建树与工具链已复制到
+> `~/Documents/op/`：`panda_fw_base`（0.9.x 基线 + safety_byd.h，**日常改固件用这个**）、
+> `panda_fw_010`（0.10.x 基线备份）、`arm-tc`（交叉工具链）。
+> 重建固件：`export PATH="$HOME/Documents/op/arm-tc/bin:$HOME/.local/bin:$PATH"`
+> 后在 `~/Documents/op/panda_fw_base` 里执行第四节命令。
+
 ### 1. 交叉编译工具链
 
 brew cask 安装会在后台卡死（需要 sudo 交互），**用官方 tarball 直下 + 断点续传**：
