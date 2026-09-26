@@ -24,7 +24,7 @@ def get_expected_signature(panda: Panda) -> bytes:
 def flash_panda(panda_serial: str) -> Panda:
   # PandaSkipFlashCheck: accept whatever firmware the panda runs (e.g. a
   # vendor/development build) without re-flashing; set via params
-  if params.get_bool("PandaSkipFlashCheck"):
+  if Params().get_bool("PandaSkipFlashCheck"):
     cloudlog.warning("PandaSkipFlashCheck enabled, skipping firmware flash and signature check")
     return Panda(panda_serial)
 
