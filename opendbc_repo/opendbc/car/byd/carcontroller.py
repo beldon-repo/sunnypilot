@@ -138,15 +138,14 @@ class CarController(CarControllerBase):
     # 0x316 while disengaged faults the ADAS domain (ACC_HUD_ADAS AccState=7)
     # and makes the stock ACC buttons unresponsive.
     steer_send = None
+    new_actuators = CC.actuators.as_builder()
     if CC.enabled or CC.latActive:
       if USE_ANGLE_STEERING:
         steer_send = self._update_angle_lateral(CC, CS)
-        new_actuators = CC.actuators.as_builder()
         if steer_send is not None:
           new_actuators.steeringAngleDeg = self.apply_angle_last
       else:
         steer_send = self._update_torque_lateral(CC, CS)
-        new_actuators = CC.actuators.as_builder()
         new_actuators.torque = self.apply_torque_last / CarControllerParams.STEER_MAX
         new_actuators.torqueOutputCan = float(self.apply_torque_last)
 
