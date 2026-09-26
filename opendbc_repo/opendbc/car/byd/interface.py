@@ -26,8 +26,11 @@ class CarInterface(CarInterfaceBase):
     ret.radarUnavailable = True
 
     # longitudinal control is done by the stock ACC; openpilot only does
-    # lateral control plus spoofed resume button for auto-resume from standstill
+    # lateral control plus spoofed resume button for auto-resume from standstill.
+    # pcmCruise ties openpilot's engagement to the stock ACC state (like the
+    # Geely port): OP enables on the rising edge of cruiseState.enabled.
     ret.openpilotLongitudinalControl = False
+    ret.pcmCruise = True
     ret.autoResumeSng = True
 
     ret.wheelSpeedFactor = HUD_MULTIPLIER

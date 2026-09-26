@@ -69,9 +69,11 @@ class CarState(CarStateBase):
     ret.steeringPressed = bool(abs(ret.steeringTorque) > CarControllerParams.STEER_THRESHOLD)
 
     # stock ACC status; LKA is coupled to the stock ACC on this platform
-    # Song Plus DM-i encodes AccState differently from Han: 1 = ACC_ACTIVE
+    # Song Plus DM-i encodes AccState differently from Han: 1 = ACC_ACTIVE,
+    # 7 = main on / standby (observed with SetSpeed=30, AccOn1=1)
     acc_state = int(cp_adas.vl["ACC_HUD_ADAS"]["AccState"])
-    ret.cruiseState.available = acc_state in (1, 2, 3, 5)
+    acc_on1 = bool(cp_adas.vl["ACC_HUD_ADAS"]["AccOn1"])
+    ret.cruiseState.available = acc_on1 or acc_state in (1, 2, 3, 5)
     set_speed = cp_adas.vl["ACC_HUD_ADAS"]["SetSpeed"]
     if ret.cruiseState.available:
       ret.cruiseState.speedCluster = max(set_speed, 30) * CV.KPH_TO_MS

@@ -61,10 +61,15 @@ static void byd_rx_hook(const CANPacket_t *msg) {
   }
 
   // ACC_HUD_ADAS: stock ACC status
-  if ((msg->addr == 0x32DU) && (msg->bus == 0U)) {
-    // AccState 19|3: Song encoding - 1 = ACC_ACTIVE (0=OFF, 7=ERROR)
+  // NOTE(Song Plus DM-i): the stock DiPilot camera sits on the intercepted
+  // camera-side CAN (bus 2), so its messages are received on bus 2.
+  if ((msg->addr == 0x32DU) && (msg->bus == 2U)) {
+    // AccState 19|3: Song encoding - 0 = OFF, 7 = main on / standby;
+    // the engaged value(s) on Song Plus are not confirmed yet, so treat
+    // every non-standby state as engaged (pcm_cruise_check only enforces
+    // cancellation when the stock ACC turns off).
     uint8_t acc_state = ((msg->data[2] >> 3) & 0x7U);
-    bool cruise_engaged = (acc_state == 1U);
+    bool cruise_engaged = (acc_state != 0U) && (acc_state != 7U);
     pcm_cruise_check(cruise_engaged);
   }
 }
@@ -158,9 +163,57 @@ static bool byd_tx_hook(const CANPacket_t *msg) {
 }
 
 static safety_config byd_init(uint16_t param) {
+  // CAN forwarding whitelist (Song Plus DM-i gateway mode):
+  // the stock DiPilot camera's vehicle CAN is intercepted by openpilot, so
+  // card forwards powertrain messages (bus 0 -> bus 2) and camera messages
+  // (bus 2 -> bus 0). Every forwarded message inherently appears on the RX
+  // side, so check_relay must be false for all of them.
   static const CanMsg BYD_TX_MSGS_TORQUE[] = {
-    {0x316, 0, 8, .check_relay = true},   // ACC_MPC_STATE (LKAS torque request)
+    // OP's own messages (bus 0, powertrain side)
+    {0x316, 0, 8, .check_relay = false},  // ACC_MPC_STATE (LKAS torque request)
     {0x3B0, 0, 8, .check_relay = false},  // PCM_BUTTONS (SNG auto-resume)
+    // camera -> car forwarding (stock DiPilot camera TX, bus 0)
+    {0x32D, 0, 8, .check_relay = false},  // ACC_HUD_ADAS
+    {0x32E, 0, 8, .check_relay = false},  // ACC_CMD
+    {0x32F, 0, 8, .check_relay = false},
+    {0x432, 0, 8, .check_relay = false},
+    // car -> camera forwarding (powertrain, bus 2)
+
+    {0x055, 2, 8, .check_relay = false}, {0x08C, 2, 8, .check_relay = false}, {0x0D5, 2, 8, .check_relay = false},
+    {0x10D, 2, 8, .check_relay = false}, {0x10E, 2, 8, .check_relay = false}, {0x11F, 2, 8, .check_relay = false},
+    {0x121, 2, 8, .check_relay = false}, {0x122, 2, 8, .check_relay = false}, {0x123, 2, 8, .check_relay = false},
+    {0x12C, 2, 8, .check_relay = false}, {0x12D, 2, 8, .check_relay = false}, {0x133, 2, 8, .check_relay = false},
+    {0x151, 2, 8, .check_relay = false}, {0x164, 2, 8, .check_relay = false}, {0x173, 2, 8, .check_relay = false},
+    {0x1C2, 2, 8, .check_relay = false}, {0x1F0, 2, 8, .check_relay = false}, {0x20A, 2, 8, .check_relay = false},
+    {0x20D, 2, 8, .check_relay = false}, {0x20F, 2, 8, .check_relay = false}, {0x218, 2, 8, .check_relay = false},
+    {0x219, 2, 8, .check_relay = false}, {0x220, 2, 8, .check_relay = false}, {0x222, 2, 8, .check_relay = false},
+    {0x223, 2, 8, .check_relay = false}, {0x23F, 2, 8, .check_relay = false}, {0x240, 2, 8, .check_relay = false},
+    {0x241, 2, 8, .check_relay = false}, {0x242, 2, 8, .check_relay = false}, {0x24C, 2, 8, .check_relay = false},
+    {0x251, 2, 8, .check_relay = false}, {0x275, 2, 8, .check_relay = false}, {0x27E, 2, 8, .check_relay = false},
+    {0x294, 2, 8, .check_relay = false}, {0x2A9, 2, 8, .check_relay = false}, {0x2B6, 2, 8, .check_relay = false},
+    {0x2BF, 2, 8, .check_relay = false}, {0x2D4, 2, 8, .check_relay = false}, {0x2EC, 2, 8, .check_relay = false},
+    {0x30D, 2, 8, .check_relay = false}, {0x312, 2, 8, .check_relay = false}, {0x318, 2, 8, .check_relay = false},
+    {0x31D, 2, 8, .check_relay = false}, {0x31E, 2, 8, .check_relay = false}, {0x320, 2, 8, .check_relay = false},
+    {0x321, 2, 8, .check_relay = false}, {0x322, 2, 8, .check_relay = false}, {0x323, 2, 8, .check_relay = false},
+    {0x32C, 2, 8, .check_relay = false}, {0x33B, 2, 8, .check_relay = false}, {0x33C, 2, 8, .check_relay = false},
+    {0x33D, 2, 8, .check_relay = false}, {0x341, 2, 8, .check_relay = false}, {0x342, 2, 8, .check_relay = false},
+    {0x343, 2, 8, .check_relay = false}, {0x344, 2, 8, .check_relay = false}, {0x34F, 2, 8, .check_relay = false},
+    {0x356, 2, 8, .check_relay = false}, {0x35C, 2, 8, .check_relay = false}, {0x35F, 2, 8, .check_relay = false},
+    {0x36E, 2, 8, .check_relay = false}, {0x36F, 2, 8, .check_relay = false}, {0x38A, 2, 8, .check_relay = false},
+    {0x3AC, 2, 8, .check_relay = false}, {0x3AD, 2, 8, .check_relay = false}, {0x3B0, 2, 8, .check_relay = false},
+    {0x3B7, 2, 8, .check_relay = false}, {0x3C5, 2, 8, .check_relay = false}, {0x3CD, 2, 8, .check_relay = false},
+    {0x3D9, 2, 8, .check_relay = false}, {0x3EC, 2, 8, .check_relay = false}, {0x3FC, 2, 8, .check_relay = false},
+    {0x3FF, 2, 8, .check_relay = false}, {0x404, 2, 8, .check_relay = false}, {0x407, 2, 8, .check_relay = false},
+    {0x40D, 2, 8, .check_relay = false}, {0x40E, 2, 8, .check_relay = false}, {0x410, 2, 8, .check_relay = false},
+    {0x418, 2, 8, .check_relay = false}, {0x41A, 2, 8, .check_relay = false}, {0x41C, 2, 8, .check_relay = false},
+    {0x422, 2, 8, .check_relay = false}, {0x434, 2, 8, .check_relay = false}, {0x449, 2, 8, .check_relay = false},
+    {0x44A, 2, 8, .check_relay = false}, {0x475, 2, 8, .check_relay = false}, {0x48B, 2, 8, .check_relay = false},
+    {0x49A, 2, 8, .check_relay = false}, {0x4A5, 2, 8, .check_relay = false}, {0x4A9, 2, 8, .check_relay = false},
+    {0x4BB, 2, 8, .check_relay = false}, {0x4BF, 2, 8, .check_relay = false}, {0x4D9, 2, 8, .check_relay = false},
+    {0x4DE, 2, 8, .check_relay = false}, {0x4F9, 2, 8, .check_relay = false}, {0x4FA, 2, 8, .check_relay = false},
+    {0x4FE, 2, 8, .check_relay = false}, {0x511, 2, 8, .check_relay = false}, {0x512, 2, 8, .check_relay = false},
+    {0x527, 2, 8, .check_relay = false}, {0x52A, 2, 8, .check_relay = false}, {0x539, 2, 8, .check_relay = false},
+    {0x53A, 2, 8, .check_relay = false},
   };
 
   static const CanMsg BYD_TX_MSGS_ANGLE[] = {
@@ -173,7 +226,7 @@ static safety_config byd_init(uint16_t param) {
     {.msg = {{0x122, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // WHEEL_SPEED
     {.msg = {{0x242, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // DRIVE_STATE
     {.msg = {{0x342, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // PEDAL
-    {.msg = {{0x32D, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // ACC_HUD_ADAS
+    {.msg = {{0x32D, 2, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // ACC_HUD_ADAS (camera side, bus 2)
     {.msg = {{0x318, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // ACC_EPS_STATE
   };
 
@@ -182,7 +235,7 @@ static safety_config byd_init(uint16_t param) {
     {.msg = {{0x122, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // WHEEL_SPEED
     {.msg = {{0x242, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // DRIVE_STATE
     {.msg = {{0x342, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // PEDAL
-    {.msg = {{0x32D, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // ACC_HUD_ADAS
+    {.msg = {{0x32D, 2, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // ACC_HUD_ADAS (camera side, bus 2)
   };
 
   safety_config ret;
