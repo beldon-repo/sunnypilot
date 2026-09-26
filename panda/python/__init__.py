@@ -656,8 +656,8 @@ class Panda:
     # this device's panda reports UNO (0x05) under vendor firmware and UNKNOWN
     # (0x00) under the stock bootstub - the board matches no official layout.
     # report DOS so the tici stack treats it as the internal panda (both F4).
-    if ret in (HW_TYPE_UNO, HW_TYPE_UNKNOWN):
-      ret = HW_TYPE_DOS
+    if ret in (self.HW_TYPE_UNO, self.HW_TYPE_UNKNOWN):
+      ret = self.HW_TYPE_DOS
 
     return ret
 
