@@ -246,6 +246,11 @@ static safety_config byd_init(uint16_t param) {
     SET_TX_MSGS(BYD_TX_MSGS_TORQUE, ret);
     SET_RX_CHECKS(byd_rx_checks_torque, ret);
   }
+  // Song Plus DM-i: the camera already receives the powertrain bus through
+  // the harness pass-through; the panda firmware bus0<->bus2 forwarding would
+  // duplicate every frame on the camera wire and fault the stock DiPilot
+  // camera ('ACC restricted' / 'check multifunction video controller').
+  ret.disable_forwarding = true;
   return ret;
 }
 
