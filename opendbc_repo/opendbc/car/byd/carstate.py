@@ -16,6 +16,7 @@ class CarState(CarStateBase):
     self.res_btn_pressed = False
     self.counter_pcm_buttons = 0
     self.eps_state_msg = {}
+    self.is_cruise_latch = False
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
@@ -87,22 +88,18 @@ class CarState(CarStateBase):
     ret.cruiseState.standstill = standstill_state
     ret.cruiseState.nonAdaptive = False
 
-    # BYD cancels ACC at standstill; keep track of the engaged state so openpilot
-    # stays active through stops and can auto-resume with the spoofed resume button
     self.res_btn_pressed = cp.vl["PCM_BUTTONS"]["BTN_AccUpDown_Cmd"] != 0
     self.counter_pcm_buttons = cp.vl["PCM_BUTTONS"]["Counter"]
-    if self.res_btn_pressed and (ret.brakePressed == standstill_state):
-      self.is_cruise_latch = True
 
-    if acc_req_not_standstill:
-      self.is_cruise_latch = True
-    else:
-      if not standstill_state:
-        self.is_cruise_latch = False
-
+    # cruiseState.enabled must strictly follow the stock ACC state. AccState 7
+    # is main-on/standby on Song Plus DM-i (not engaged); AccControlActive is
+    # asserted even while disengaged on this platform, so it may only keep the
+    # cruise enabled, never turn it on by itself.
     stock_acc_on = acc_state in (1, 2, 3, 5)
-    if not ret.cruiseState.available or ret.brakePressed or not (stock_acc_on or acc_control_active):
+    if not ret.cruiseState.available or ret.brakePressed or acc_state in (0, 7):
       self.is_cruise_latch = False
+    elif stock_acc_on or (acc_control_active and (acc_req_not_standstill or standstill_state)):
+      self.is_cruise_latch = True
 
     ret.cruiseState.enabled = self.is_cruise_latch
     # stock LKA is coupled to the stock ACC on this platform; used by the
