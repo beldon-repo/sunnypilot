@@ -19,6 +19,7 @@ class CarState(CarStateBase):
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
+    cp_adas = can_parsers[Bus.adas]
 
     ret = structs.CarState()
     ret_sp = structs.CarStateSP()
@@ -65,18 +66,18 @@ class CarState(CarStateBase):
 
     # stock ACC status; LKA is coupled to the stock ACC on this platform
     # Song Plus DM-i encodes AccState differently from Han: 1 = ACC_ACTIVE
-    acc_state = int(cp.vl["ACC_HUD_ADAS"]["AccState"])
+    acc_state = int(cp_adas.vl["ACC_HUD_ADAS"]["AccState"])
     ret.cruiseState.available = acc_state in (1, 2, 3, 5)
-    set_speed = cp.vl["ACC_HUD_ADAS"]["SetSpeed"]
+    set_speed = cp_adas.vl["ACC_HUD_ADAS"]["SetSpeed"]
     if ret.cruiseState.available:
       ret.cruiseState.speedCluster = max(set_speed, 30) * CV.KPH_TO_MS
     else:
       ret.cruiseState.speedCluster = 0.
     ret.cruiseState.speed = ret.cruiseState.speedCluster
 
-    acc_control_active = bool(cp.vl["ACC_CMD"]["AccControlActive"])
-    acc_req_not_standstill = bool(cp.vl["ACC_CMD"]["AccReqNotStandstill"])
-    standstill_state = bool(cp.vl["ACC_CMD"]["StandstillState"])
+    acc_control_active = bool(cp_adas.vl["ACC_CMD"]["AccControlActive"])
+    acc_req_not_standstill = bool(cp_adas.vl["ACC_CMD"]["AccReqNotStandstill"])
+    standstill_state = bool(cp_adas.vl["ACC_CMD"]["StandstillState"])
     ret.cruiseState.standstill = standstill_state
     ret.cruiseState.nonAdaptive = False
 
@@ -106,8 +107,8 @@ class CarState(CarStateBase):
     ret.leftBlinker = bool(cp.vl["STALKS"]["LeftIndicator"])
     ret.rightBlinker = bool(cp.vl["STALKS"]["RightIndicator"])
     ret.espDisabled = False
-    ret.stockAeb = bool(cp.vl["ACC_HUD_ADAS"]["AEB"])
-    ret.stockFcw = bool(cp.vl["ACC_HUD_ADAS"]["FCW"])
+    ret.stockAeb = bool(cp_adas.vl["ACC_HUD_ADAS"]["AEB"])
+    ret.stockFcw = bool(cp_adas.vl["ACC_HUD_ADAS"]["FCW"])
 
     ret.leftBlindspot = bool(cp.vl["BSD_RADAR"]["LEFT_APPROACH"])
     ret.rightBlindspot = bool(cp.vl["BSD_RADAR"]["RIGHT_APPROACH"])
@@ -116,8 +117,26 @@ class CarState(CarStateBase):
 
   @staticmethod
   def get_can_parsers(CP, CP_SP):
+    # Song Plus DM-i bus layout (verified from real vehicle CAN logs):
+    #   bus0 = powertrain/chassis + ADAS feedback (EPS, BSD_RADAR, ACC_EPS_STATE, ...)
+    #   bus2 = ACC/ADAS command domain (ACC_HUD_ADAS, ACC_CMD)
+    dbc = DBC[CP.carFingerprint][Bus.pt]
+    pt_messages = [
+      ("EPS", 100),              # 0x11f
+      ("WHEEL_SPEED", 50),       # 0x122
+      ("BCM", 10),               # 0x12d
+      ("STALKS", 10),            # 0x133
+      ("DRIVE_STATE", 20),       # 0x242
+      ("ACC_EPS_STATE", 50),     # 0x318
+      ("PEDAL", 20),             # 0x342
+      ("PCM_BUTTONS", 10),       # 0x3b0
+      ("BSD_RADAR", 10),         # 0x418
+    ]
+    adas_messages = [
+      ("ACC_HUD_ADAS", 20),      # 0x32d
+      ("ACC_CMD", 20),           # 0x32e
+    ]
     return {
-      # BYD shares one CAN bus between the powertrain and the ADAS domain
-      # TODO(Song Plus DM-i): verify bus layout from real vehicle CAN logs
-      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 0),
+      Bus.pt: CANParser(dbc, pt_messages, 0),
+      Bus.adas: CANParser(dbc, adas_messages, 2),
     }
