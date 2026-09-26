@@ -62,9 +62,9 @@ static void byd_rx_hook(const CANPacket_t *msg) {
 
   // ACC_HUD_ADAS: stock ACC status
   if ((msg->addr == 0x32DU) && (msg->bus == 0U)) {
-    // AccState 19|3: 0=OFF, 2=ACC_ON, 3=ACC_ACTIVE, 5=FORCE_ACCEL, 7=ERROR
+    // AccState 19|3: Song encoding - 1 = ACC_ACTIVE (0=OFF, 7=ERROR)
     uint8_t acc_state = ((msg->data[2] >> 3) & 0x7U);
-    bool cruise_engaged = (acc_state == 3U) || (acc_state == 5U);
+    bool cruise_engaged = (acc_state == 1U);
     pcm_cruise_check(cruise_engaged);
   }
 }

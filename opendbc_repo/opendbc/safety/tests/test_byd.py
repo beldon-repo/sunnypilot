@@ -73,7 +73,7 @@ class TestBydSafetyTorque(BydButtonTestBase, common.PandaCarSafetyTest, common.D
     return self.packer.make_can_msg_panda("ACC_EPS_STATE", 0, values)
 
   def _pcm_status_msg(self, enable):
-    values = {"AccState": 3 if enable else 0}
+    values = {"AccState": 1 if enable else 0}  # Song: 1 = ACC_ACTIVE
     return self.packer.make_can_msg_panda("ACC_HUD_ADAS", 0, values)
 
   def _speed_msg(self, speed):
@@ -128,7 +128,7 @@ class TestBydSafetyAngle(BydButtonTestBase, common.PandaCarSafetyTest, common.An
     return self.packer.make_can_msg_panda("EPS", 0, values)
 
   def _pcm_status_msg(self, enable):
-    values = {"AccState": 3 if enable else 0}
+    values = {"AccState": 1 if enable else 0}  # Song: 1 = ACC_ACTIVE
     return self.packer.make_can_msg_panda("ACC_HUD_ADAS", 0, values)
 
   def _speed_msg(self, speed):

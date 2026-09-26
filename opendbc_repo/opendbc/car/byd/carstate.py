@@ -29,12 +29,13 @@ class CarState(CarStateBase):
     self.eps_state_msg = cp.vl["ACC_EPS_STATE"]
 
     # speed
-    # TODO(Song Plus DM-i): verify wheel speed layout from real vehicle CAN logs
+    # vehicle speed from BSD_RADAR (verified on Song Plus DM-i: smooth 0-120+ km/h);
+    # the 0x122 wheel-speed layout does not match on Song (values implausible)
     self.parse_wheel_speeds(ret,
-      cp.vl["WHEEL_SPEED"]["WHEELSPEED_FL"],
-      cp.vl["WHEEL_SPEED"]["WHEELSPEED_FR"],
-      cp.vl["WHEEL_SPEED"]["WHEELSPEED_BL"],
-      cp.vl["WHEEL_SPEED"]["WHEELSPEED_BL"],  # TODO: BR sensor quirk on Atto 3, verify on Song
+      cp.vl["BSD_RADAR"]["VEHICLE_SPEED"],
+      cp.vl["BSD_RADAR"]["VEHICLE_SPEED"],
+      cp.vl["BSD_RADAR"]["VEHICLE_SPEED"],
+      cp.vl["BSD_RADAR"]["VEHICLE_SPEED"],
     )
     ret.vEgoCluster = ret.vEgo
     ret.standstill = ret.vEgoRaw < 0.05
@@ -63,8 +64,9 @@ class CarState(CarStateBase):
     ret.steeringPressed = bool(abs(ret.steeringTorque) > CarControllerParams.STEER_THRESHOLD)
 
     # stock ACC status; LKA is coupled to the stock ACC on this platform
+    # Song Plus DM-i encodes AccState differently from Han: 1 = ACC_ACTIVE
     acc_state = int(cp.vl["ACC_HUD_ADAS"]["AccState"])
-    ret.cruiseState.available = acc_state in (2, 3, 5)  # ACC_ON, ACC_ACTIVE, FORCE_ACCEL
+    ret.cruiseState.available = acc_state in (1, 2, 3, 5)
     set_speed = cp.vl["ACC_HUD_ADAS"]["SetSpeed"]
     if ret.cruiseState.available:
       ret.cruiseState.speedCluster = max(set_speed, 30) * CV.KPH_TO_MS
@@ -91,7 +93,7 @@ class CarState(CarStateBase):
       if not standstill_state:
         self.is_cruise_latch = False
 
-    stock_acc_on = acc_state in (2, 3, 5)
+    stock_acc_on = acc_state in (1, 2, 3, 5)
     if not ret.cruiseState.available or ret.brakePressed or not (stock_acc_on or acc_control_active):
       self.is_cruise_latch = False
 
