@@ -216,24 +216,11 @@ class Car:
 
     self.sm.update(0)
 
-    # CAN forwarding between powertrain (bus 0) and camera (bus 2).
-    # Only forward the messages the stock camera actually consumes (speed,
-    # gear, pedals, steering, EPS feedback, buttons); forwarding the whole
-    # powertrain bus overwhelms the camera wire and the card process.
-    FWD_PT_TO_CAMERA = (0x11F, 0x122, 0x133, 0x12D, 0x1F0, 0x20A, 0x242, 0x318, 0x342, 0x3B0)
-    FWD_CAMERA_TO_PT = (0x32D, 0x32E, 0x32F, 0x432)
+    # NOTE(Song Plus DM-i): card-level CAN forwarding is disabled. The
+    # firmware/dual-panda path already relays between the powertrain and
+    # camera segments; software forwarding duplicated frames on the camera
+    # wire and faulted the stock DiPilot camera.
     self.fwd_can_sends = []
-    if self.can_forwarding:
-      enabled = self.sm['carControl'].enabled
-      for _, frames in can_list:
-        for addr, dat, bus in frames:
-          if bus == 0 and addr in FWD_PT_TO_CAMERA:
-            self.fwd_can_sends.append((addr, dat, 2))
-          elif bus == 2 and addr in FWD_CAMERA_TO_PT:
-            # drop the camera's LKA request while OP is engaged
-            if addr == 0x316 and enabled:
-              continue
-            self.fwd_can_sends.append((addr, dat, 0))
 
     can_rcv_valid = len(can_strs) > 0
 
