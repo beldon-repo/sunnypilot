@@ -22,10 +22,11 @@ def get_expected_signature(panda: Panda) -> bytes:
     return b""
 
 def flash_panda(panda_serial: str) -> Panda:
-  # PandaSkipFlashCheck: accept whatever firmware the panda runs (e.g. a
-  # vendor/development build) without re-flashing; set via params
-  if Params().get_bool("PandaSkipFlashCheck"):
-    cloudlog.warning("PandaSkipFlashCheck enabled, skipping firmware flash and signature check")
+  # accept whatever firmware the panda runs (e.g. a vendor/development build)
+  # without re-flashing; flag file is used because the params key whitelist is
+  # compiled into params_pyx
+  if os.path.exists("/data/panda_skip_flash"):
+    cloudlog.warning("panda_skip_flash flag set, skipping firmware flash and signature check")
     return Panda(panda_serial)
 
   try:
