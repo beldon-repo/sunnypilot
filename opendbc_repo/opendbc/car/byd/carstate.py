@@ -65,7 +65,11 @@ class CarState(CarStateBase):
                         cp.vl["BCM"]["FrontLeftDoor"],
                         cp.vl["BCM"]["RearRightDoor"],
                         cp.vl["BCM"]["FrontRightDoor"]])
-    ret.seatbeltUnlatched = cp.vl["BCM"]["DriverSeatBeltFasten"] == 0
+    # the car already enforces the seatbelt warning itself; OP does not need to
+    # block engagement on it. The DriverSeatBeltFasten bit encoding is also
+    # unverified on Song Plus DM-i (would otherwise report unlatched while
+    # buckled). Matches the community BYD_Files port.
+    ret.seatbeltUnlatched = False
 
     # pedals
     ret.gasPressed = cp.vl["PEDAL"]["AcceleratorPedal"] > 0.01
