@@ -76,10 +76,9 @@ class CarState(CarStateBase):
     acc_on1 = bool(cp_adas.vl["ACC_HUD_ADAS"]["AccOn1"])
     ret.cruiseState.available = acc_on1 or acc_state in (1, 2, 3, 5)
     set_speed = cp_adas.vl["ACC_HUD_ADAS"]["SetSpeed"]
-    if ret.cruiseState.available:
-      ret.cruiseState.speedCluster = max(set_speed, 30) * CV.KPH_TO_MS
-    else:
-      ret.cruiseState.speedCluster = 0.
+    # follow the stock ACC set speed directly (community port does the same);
+    # no artificial 30 km/h floor
+    ret.cruiseState.speedCluster = set_speed * CV.KPH_TO_MS if ret.cruiseState.available else 0.
     ret.cruiseState.speed = ret.cruiseState.speedCluster
 
     acc_control_active = bool(cp_adas.vl["ACC_CMD"]["AccControlActive"])

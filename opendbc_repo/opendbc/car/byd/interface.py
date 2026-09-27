@@ -19,9 +19,10 @@ class CarInterface(CarInterfaceBase):
     else:
       ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.byd)]
       ret.steerControlType = structs.CarParams.SteerControlType.torque
-      ret.steerActuatorDelay = 0.1
+      # community BYD port measured ~0.4s total on torque cars (latcontrol adds ~0.2)
+      ret.steerActuatorDelay = 0.2
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
-    ret.steerLimitTimer = 0.4
+    ret.steerLimitTimer = 0.6
 
     ret.radarUnavailable = True
 

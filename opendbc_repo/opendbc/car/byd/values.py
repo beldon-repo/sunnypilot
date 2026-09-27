@@ -20,7 +20,8 @@ class CarControllerParams:
   # --- torque path (default), matches BYD_TORQUE_STEERING_LIMITS in byd.h ---
   STEER_MAX = 300
   STEER_STEP = 2            # 50 Hz command rate (100 Hz control loop)
-  STEER_DELTA_UP = 7        # per command at 50 Hz; ISO 11270 jerk limit
+  STEER_DELTA_UP = 10       # per command at 50 Hz; matches safety max_rate_up
+                            # (community port runs 16-17, raise only with real-vehicle validation)
   STEER_DELTA_DOWN = 12     # per command at 50 Hz
   STEER_DRIVER_ALLOWANCE = 68
   STEER_DRIVER_MULTIPLIER = 3

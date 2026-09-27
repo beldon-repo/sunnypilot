@@ -4,6 +4,11 @@
 // tici-compatible board (official v0.10.1 firmware does not boot on it).
 // Same protocol/logic as opendbc/safety/modes/byd.h in the main repo.
 //
+// NOTE: the currently flashed firmware (app hash 4be260bc) was built BEFORE
+// the ESP_SPEED fix below; it still reads vehicle_moving from 0x122, which is
+// all zeros on Song Plus DM-i. Rebuild and reflash from this file to pick up
+// the fix; keep this file in sync with opendbc/safety/modes/byd.h.
+//
 //  param 0 (default): TORQUE path. The EPS follows the LKAS request carried in
 //    ACC_MPC_STATE (0x316): LKAS_Config=LKA, LKAS_Output=steer torque,
 //    LKAS_Active=actuation. Stock ACC is used for longitudinal; PCM_BUTTONS
@@ -11,8 +16,9 @@
 //  param 1: experimental ANGLE path (Atto 3 style), spoofing
 //    STEERING_MODULE_ADAS (0x1E2) with a desired angle.
 //
-// TODO(Song Plus DM-i): verify LKAS_Output scaling, driver torque thresholds
-// and the 0x122 wheel speed layout from real vehicle CAN logs.
+// TODO(Song Plus DM-i): verify LKAS_Output scaling and driver torque
+// thresholds from real vehicle CAN logs. 0x122 is confirmed to read all
+// zeros on this car; speed comes from 0x1F0 ESP_SPEED instead.
 
 #define BYD_PARAM_ANGLE_STEERING 1
 
@@ -30,12 +36,15 @@ static void byd_rx_hook(const CANPacket_t *to_push) {
       update_sample(&angle_meas, angle_meas_new);
     }
 
-    // WHEEL_SPEED: rear wheel speeds, factor 0.1 km/h, little endian
-    if (addr == 0x122U) {
-      uint16_t left_rear = ((GET_BYTE(to_push, 5) << 8) | GET_BYTE(to_push, 4));
-      uint16_t right_rear = ((GET_BYTE(to_push, 7) << 8) | GET_BYTE(to_push, 6));
-      vehicle_moving = (left_rear | right_rear) != 0U;
-      UPDATE_VEHICLE_SPEED(((left_rear + right_rear) / 2.0) * 0.1 / 3.6);
+    // WHEEL_SPEED: 0x122 reads all zeros on Song Plus DM-i (verified on real
+    // vehicle logs), so it must NOT be used for speed or motion detection.
+    // Kept in the RX checks only for liveness.
+
+    // ESP_SPEED: real vehicle speed, byte 4, factor 1 km/h (bus 0)
+    if (addr == 0x1F0U) {
+      uint16_t esp_speed_kph = GET_BYTE(to_push, 4);
+      vehicle_moving = esp_speed_kph != 0U;
+      UPDATE_VEHICLE_SPEED(esp_speed_kph / 3.6);
     }
 
     // PEDAL: analog gas and brake pedal, factor 0.01 (percent)
@@ -208,7 +217,8 @@ static safety_config byd_init(uint16_t param) {
 
   static RxCheck byd_rx_checks_torque[] = {
     {.msg = {{0x11F, 0, 5, .frequency = 100U}, { 0 }, { 0 }}},  // EPS
-    {.msg = {{0x122, 0, 8, .frequency = 50U}, { 0 }, { 0 }}},   // WHEEL_SPEED
+    {.msg = {{0x122, 0, 8, .frequency = 50U}, { 0 }, { 0 }}},   // WHEEL_SPEED (all zeros on Song Plus, liveness only)
+    {.msg = {{0x1F0, 0, 8, .frequency = 20U}, { 0 }, { 0 }}},   // ESP_SPEED (real vehicle speed)
     {.msg = {{0x242, 0, 8, .frequency = 50U}, { 0 }, { 0 }}},   // DRIVE_STATE
     {.msg = {{0x342, 0, 8, .frequency = 50U}, { 0 }, { 0 }}},   // PEDAL
     {.msg = {{0x32D, 2, 8, .frequency = 10U}, { 0 }, { 0 }}},   // ACC_HUD_ADAS (camera side, bus 2)
@@ -217,7 +227,8 @@ static safety_config byd_init(uint16_t param) {
 
   static RxCheck byd_rx_checks_angle[] = {
     {.msg = {{0x11F, 0, 5, .frequency = 100U}, { 0 }, { 0 }}},  // EPS
-    {.msg = {{0x122, 0, 8, .frequency = 50U}, { 0 }, { 0 }}},   // WHEEL_SPEED
+    {.msg = {{0x122, 0, 8, .frequency = 50U}, { 0 }, { 0 }}},   // WHEEL_SPEED (all zeros on Song Plus, liveness only)
+    {.msg = {{0x1F0, 0, 8, .frequency = 20U}, { 0 }, { 0 }}},   // ESP_SPEED (real vehicle speed)
     {.msg = {{0x242, 0, 8, .frequency = 50U}, { 0 }, { 0 }}},   // DRIVE_STATE
     {.msg = {{0x342, 0, 8, .frequency = 50U}, { 0 }, { 0 }}},   // PEDAL
     {.msg = {{0x32D, 2, 8, .frequency = 10U}, { 0 }, { 0 }}},   // ACC_HUD_ADAS (camera side, bus 2)

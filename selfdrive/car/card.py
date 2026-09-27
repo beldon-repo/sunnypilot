@@ -83,12 +83,6 @@ class Car:
 
     self.last_actuators_output = structs.CarControl.Actuators()
 
-    # CAN forwarding (Song Plus DM-i gateway mode): the stock DiPilot camera's
-    # vehicle CAN is intercepted, so forward messages between the powertrain
-    # side (bus 0) and the camera side (bus 2).
-    self.can_forwarding = False  # set once CP is known
-    self.fwd_can_sends: list = []
-
     self.params = Params()
 
     self.can_callbacks = can_comm_callbacks(self.can_sock, self.pm.sock['sendcan'])
@@ -130,8 +124,6 @@ class Car:
 
     self.CP.alternativeExperience = 0
 
-    # Song Plus DM-i: stock camera stays connected, OP acts as a CAN gateway
-    self.can_forwarding = self.CP.brand == 'byd'
     # mads
     set_alternative_experience(self.CP, self.params)
     set_car_specific_params(self.CP, self.CP_SP, self.params)
@@ -216,12 +208,6 @@ class Car:
 
     self.sm.update(0)
 
-    # NOTE(Song Plus DM-i): card-level CAN forwarding is disabled. The
-    # firmware/dual-panda path already relays between the powertrain and
-    # camera segments; software forwarding duplicated frames on the camera
-    # wire and faulted the stock DiPilot camera.
-    self.fwd_can_sends = []
-
     can_rcv_valid = len(can_strs) > 0
 
     # Check for CAN timeout
@@ -298,8 +284,6 @@ class Car:
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       self.last_actuators_output, can_sends = self.CI.apply(CC, convert_carControlSP(CC_SP), now_nanos)
-      if self.can_forwarding:
-        can_sends.extend(self.fwd_can_sends)
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 
       self.CC_prev = CC

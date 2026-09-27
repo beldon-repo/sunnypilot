@@ -15,8 +15,11 @@
 //    STEERING_MODULE_ADAS (0x1E2) with a desired angle. Song Plus DM-i does
 //    not transmit 0x1E2, so this path is kept only as a fallback.
 //
-// TODO(Song Plus DM-i): verify LKAS_Output scaling, driver torque thresholds
-// and the 0x122 wheel speed layout from real vehicle CAN logs.
+// TODO(Song Plus DM-i): verify LKAS_Output scaling and driver torque
+// thresholds from real vehicle CAN logs. 0x122 is confirmed to read all
+// zeros on this car; the real speed comes from 0x1F0 ESP_SPEED. 0x122 is
+// still parsed as a fallback so the standard safety test harness keeps
+// working (it drives 0x122), but on the real car 0x1F0 overrides it.
 
 #define BYD_PARAM_ANGLE_STEERING 1
 
@@ -31,12 +34,23 @@ static void byd_rx_hook(const CANPacket_t *msg) {
       update_sample(&angle_meas, angle_meas_new);
     }
 
-    // WHEEL_SPEED: rear wheel speeds, factor 0.1 km/h, little endian
+    // WHEEL_SPEED: 0x122 reads all zeros on Song Plus DM-i (verified on real
+    // vehicle logs). It is parsed here only so the standard safety test harness
+    // (which drives 0x122) keeps working; on the real car the 0x1F0 branch
+    // below overrides it every 50 ms.
     if (msg->addr == 0x122U) {
       uint16_t left_rear = ((msg->data[5] << 8) | msg->data[4]);
       uint16_t right_rear = ((msg->data[7] << 8) | msg->data[6]);
       vehicle_moving = (left_rear | right_rear) != 0U;
       UPDATE_VEHICLE_SPEED(((left_rear + right_rear) / 2.0) * 0.1 * KPH_TO_MS);
+    }
+
+    // ESP_SPEED: real vehicle speed on Song Plus DM-i, byte 4, factor 1 km/h
+    // (bus 0). Overrides the all-zero 0x122 reading on the real car.
+    if (msg->addr == 0x1F0U) {
+      uint16_t esp_speed_kph = msg->data[4];
+      vehicle_moving = esp_speed_kph != 0U;
+      UPDATE_VEHICLE_SPEED(esp_speed_kph * KPH_TO_MS);
     }
 
     // PEDAL: analog gas and brake pedal, factor 0.01 (percent)
@@ -162,68 +176,32 @@ static bool byd_tx_hook(const CANPacket_t *msg) {
   return tx;
 }
 
-static safety_config byd_init(uint16_t param) {
-  // CAN forwarding whitelist (Song Plus DM-i gateway mode):
-  // the stock DiPilot camera's vehicle CAN is intercepted by openpilot, so
-  // card forwards powertrain messages (bus 0 -> bus 2) and camera messages
-  // (bus 2 -> bus 0). Every forwarded message inherently appears on the RX
-  // side, so check_relay must be false for all of them.
-  static const CanMsg BYD_TX_MSGS_TORQUE[] = {
-    // OP's own messages (bus 0, powertrain side)
-    {0x316, 0, 8, .check_relay = false},  // ACC_MPC_STATE (LKAS torque request)
-    {0x3B0, 0, 8, .check_relay = false},  // PCM_BUTTONS (SNG auto-resume)
-    // camera -> car forwarding (stock DiPilot camera TX, bus 0)
-    {0x32D, 0, 8, .check_relay = false},  // ACC_HUD_ADAS
-    {0x32E, 0, 8, .check_relay = false},  // ACC_CMD
-    {0x32F, 0, 8, .check_relay = false},
-    {0x432, 0, 8, .check_relay = false},
-    // car -> camera forwarding (powertrain, bus 2)
+static bool byd_fwd_hook(int bus_num, int addr) {
+  // Song Plus DM-i gateway mode: the harness cuts the camera/radar vehicle CAN,
+  // so the panda firmware relays bus 0 <-> bus 2. Never loop OP's own spoofed
+  // messages between the two segments. Matches byd_fwd_hook in
+  // docs/firmware-safety_byd.h (the source of the flashed firmware).
+  return (addr == 0x1E2U) || (addr == 0x316U) || (addr == 0x3B0U);
+}
 
-    {0x055, 2, 8, .check_relay = false}, {0x08C, 2, 8, .check_relay = false}, {0x0D5, 2, 8, .check_relay = false},
-    {0x10D, 2, 8, .check_relay = false}, {0x10E, 2, 8, .check_relay = false}, {0x11F, 2, 8, .check_relay = false},
-    {0x121, 2, 8, .check_relay = false}, {0x122, 2, 8, .check_relay = false}, {0x123, 2, 8, .check_relay = false},
-    {0x12C, 2, 8, .check_relay = false}, {0x12D, 2, 8, .check_relay = false}, {0x133, 2, 8, .check_relay = false},
-    {0x151, 2, 8, .check_relay = false}, {0x164, 2, 8, .check_relay = false}, {0x173, 2, 8, .check_relay = false},
-    {0x1C2, 2, 8, .check_relay = false}, {0x1F0, 2, 8, .check_relay = false}, {0x20A, 2, 8, .check_relay = false},
-    {0x20D, 2, 8, .check_relay = false}, {0x20F, 2, 8, .check_relay = false}, {0x218, 2, 8, .check_relay = false},
-    {0x219, 2, 8, .check_relay = false}, {0x220, 2, 8, .check_relay = false}, {0x222, 2, 8, .check_relay = false},
-    {0x223, 2, 8, .check_relay = false}, {0x23F, 2, 8, .check_relay = false}, {0x240, 2, 8, .check_relay = false},
-    {0x241, 2, 8, .check_relay = false}, {0x242, 2, 8, .check_relay = false}, {0x24C, 2, 8, .check_relay = false},
-    {0x251, 2, 8, .check_relay = false}, {0x275, 2, 8, .check_relay = false}, {0x27E, 2, 8, .check_relay = false},
-    {0x294, 2, 8, .check_relay = false}, {0x2A9, 2, 8, .check_relay = false}, {0x2B6, 2, 8, .check_relay = false},
-    {0x2BF, 2, 8, .check_relay = false}, {0x2D4, 2, 8, .check_relay = false}, {0x2EC, 2, 8, .check_relay = false},
-    {0x30D, 2, 8, .check_relay = false}, {0x312, 2, 8, .check_relay = false}, {0x318, 2, 8, .check_relay = false},
-    {0x31D, 2, 8, .check_relay = false}, {0x31E, 2, 8, .check_relay = false}, {0x320, 2, 8, .check_relay = false},
-    {0x321, 2, 8, .check_relay = false}, {0x322, 2, 8, .check_relay = false}, {0x323, 2, 8, .check_relay = false},
-    {0x32C, 2, 8, .check_relay = false}, {0x33B, 2, 8, .check_relay = false}, {0x33C, 2, 8, .check_relay = false},
-    {0x33D, 2, 8, .check_relay = false}, {0x341, 2, 8, .check_relay = false}, {0x342, 2, 8, .check_relay = false},
-    {0x343, 2, 8, .check_relay = false}, {0x344, 2, 8, .check_relay = false}, {0x34F, 2, 8, .check_relay = false},
-    {0x356, 2, 8, .check_relay = false}, {0x35C, 2, 8, .check_relay = false}, {0x35F, 2, 8, .check_relay = false},
-    {0x36E, 2, 8, .check_relay = false}, {0x36F, 2, 8, .check_relay = false}, {0x38A, 2, 8, .check_relay = false},
-    {0x3AC, 2, 8, .check_relay = false}, {0x3AD, 2, 8, .check_relay = false}, {0x3B0, 2, 8, .check_relay = false},
-    {0x3B7, 2, 8, .check_relay = false}, {0x3C5, 2, 8, .check_relay = false}, {0x3CD, 2, 8, .check_relay = false},
-    {0x3D9, 2, 8, .check_relay = false}, {0x3EC, 2, 8, .check_relay = false}, {0x3FC, 2, 8, .check_relay = false},
-    {0x3FF, 2, 8, .check_relay = false}, {0x404, 2, 8, .check_relay = false}, {0x407, 2, 8, .check_relay = false},
-    {0x40D, 2, 8, .check_relay = false}, {0x40E, 2, 8, .check_relay = false}, {0x410, 2, 8, .check_relay = false},
-    {0x418, 2, 8, .check_relay = false}, {0x41A, 2, 8, .check_relay = false}, {0x41C, 2, 8, .check_relay = false},
-    {0x422, 2, 8, .check_relay = false}, {0x434, 2, 8, .check_relay = false}, {0x449, 2, 8, .check_relay = false},
-    {0x44A, 2, 8, .check_relay = false}, {0x475, 2, 8, .check_relay = false}, {0x48B, 2, 8, .check_relay = false},
-    {0x49A, 2, 8, .check_relay = false}, {0x4A5, 2, 8, .check_relay = false}, {0x4A9, 2, 8, .check_relay = false},
-    {0x4BB, 2, 8, .check_relay = false}, {0x4BF, 2, 8, .check_relay = false}, {0x4D9, 2, 8, .check_relay = false},
-    {0x4DE, 2, 8, .check_relay = false}, {0x4F9, 2, 8, .check_relay = false}, {0x4FA, 2, 8, .check_relay = false},
-    {0x4FE, 2, 8, .check_relay = false}, {0x511, 2, 8, .check_relay = false}, {0x512, 2, 8, .check_relay = false},
-    {0x527, 2, 8, .check_relay = false}, {0x52A, 2, 8, .check_relay = false}, {0x539, 2, 8, .check_relay = false},
-    {0x53A, 2, 8, .check_relay = false},
+static safety_config byd_init(uint16_t param) {
+  // TX whitelist matches the flashed firmware (docs/firmware-safety_byd.h):
+  // OP's own messages only. Card-level CAN forwarding is disabled; the
+  // firmware relay (byd_fwd_hook above) carries bus 0 <-> bus 2 traffic.
+  static const CanMsg BYD_TX_MSGS_TORQUE[] = {
+    {0x316, 0, 8},  // ACC_MPC_STATE (LKAS torque request)
+    {0x3B0, 0, 8},  // PCM_BUTTONS (SNG auto-resume)
   };
 
   static const CanMsg BYD_TX_MSGS_ANGLE[] = {
-    {0x1E2, 0, 8, .check_relay = true},   // STEERING_MODULE_ADAS (experimental angle path)
-    {0x3B0, 0, 8, .check_relay = false},  // PCM_BUTTONS (SNG auto-resume)
+    {0x1E2, 0, 8},  // STEERING_MODULE_ADAS (experimental angle path)
+    {0x3B0, 0, 8},  // PCM_BUTTONS (SNG auto-resume)
   };
 
   static RxCheck byd_rx_checks_torque[] = {
     {.msg = {{0x11F, 0, 5, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  // EPS
-    {.msg = {{0x122, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // WHEEL_SPEED
+    {.msg = {{0x122, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // WHEEL_SPEED (all zeros on Song Plus, liveness only)
+    {.msg = {{0x1F0, 0, 8, 20U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // ESP_SPEED (real vehicle speed)
     {.msg = {{0x242, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // DRIVE_STATE
     {.msg = {{0x342, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // PEDAL
     {.msg = {{0x32D, 2, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // ACC_HUD_ADAS (camera side, bus 2)
@@ -232,7 +210,8 @@ static safety_config byd_init(uint16_t param) {
 
   static RxCheck byd_rx_checks_angle[] = {
     {.msg = {{0x11F, 0, 5, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  // EPS
-    {.msg = {{0x122, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // WHEEL_SPEED
+    {.msg = {{0x122, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // WHEEL_SPEED (all zeros on Song Plus, liveness only)
+    {.msg = {{0x1F0, 0, 8, 20U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // ESP_SPEED (real vehicle speed)
     {.msg = {{0x242, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // DRIVE_STATE
     {.msg = {{0x342, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // PEDAL
     {.msg = {{0x32D, 2, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // ACC_HUD_ADAS (camera side, bus 2)
@@ -246,11 +225,6 @@ static safety_config byd_init(uint16_t param) {
     SET_TX_MSGS(BYD_TX_MSGS_TORQUE, ret);
     SET_RX_CHECKS(byd_rx_checks_torque, ret);
   }
-  // Song Plus DM-i: the camera already receives the powertrain bus through
-  // the harness pass-through; the panda firmware bus0<->bus2 forwarding would
-  // duplicate every frame on the camera wire and fault the stock DiPilot
-  // camera ('ACC restricted' / 'check multifunction video controller').
-  ret.disable_forwarding = true;
   return ret;
 }
 
@@ -258,4 +232,5 @@ const safety_hooks byd_hooks = {
   .init = byd_init,
   .rx = byd_rx_hook,
   .tx = byd_tx_hook,
+  .fwd = byd_fwd_hook,
 };
