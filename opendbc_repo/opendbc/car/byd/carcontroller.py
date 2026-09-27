@@ -89,13 +89,17 @@ class CarController(CarControllerBase):
     # stale LKAS_Prepared as armed across the fault.
     if CS.torque_failed:
       self.lkas_active = False
+      self.apply_torque_last = 0  # hard cut on fault - no ramp out of an EPS error
 
-    # engage only when the EPS reports the stock LKA prepared; deactivate otherwise
+    # engage only when the EPS reports the stock LKA prepared; deactivate
+    # only after the request has ramped back to zero (the working vendor build
+    # ramps 52->0 over ~80 ms and then drops Active - a request step straight
+    # from 50 to 0 is something the stock camera never sends)
     if lat_active and not self.lkas_active and not CS.torque_failed:
       if CS.lkas_prepared:
         self.lkas_active = True
         self.steer_softstart_limit = 0
-    elif not lat_active:
+    elif not lat_active and self.apply_torque_last == 0:
       self.lkas_active = False
 
     lkas_req_prepare = 0
@@ -103,12 +107,15 @@ class CarController(CarControllerBase):
       # compute at the 50 Hz command rate so the per-command delta limits match
       # the firmware safety model exactly (the control loop runs at 100 Hz)
       if self.frame % 2 == 0:
-        # actuators.torque is normalized to [-1, 1]
-        new_torque = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
-        new_torque = min(max(new_torque, -self.steer_softstart_limit, -CarControllerParams.STEER_MAX),
-                         self.steer_softstart_limit)
-        if self.steer_softstart_limit < CarControllerParams.STEER_MAX:
-          self.steer_softstart_limit += CarControllerParams.STEER_SOFTSTART_STEP
+        if lat_active:
+          # actuators.torque is normalized to [-1, 1]
+          new_torque = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
+          new_torque = min(max(new_torque, -self.steer_softstart_limit, -CarControllerParams.STEER_MAX),
+                           self.steer_softstart_limit)
+          if self.steer_softstart_limit < CarControllerParams.STEER_MAX:
+            self.steer_softstart_limit += CarControllerParams.STEER_SOFTSTART_STEP
+        else:
+          new_torque = 0  # graceful exit: ramp the request down, then drop Active
 
         self.apply_torque_last = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last,
                                                                   CS.out.steeringTorque, CarControllerParams)
