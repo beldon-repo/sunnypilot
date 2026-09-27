@@ -96,15 +96,33 @@ ACC_MPC_STATE（0x316，50Hz，8 字节），是 **EPS 的唯一 LKAS 命令源*
 
 ## 五、遗留问题 / 待验证
 
-1. **本轮修复未实车验证**：预期"视频控制器"+ SteerWarning 消失、EPS armed、横向出力。若 MPC 仍有历史锁存故障码，需熄火重启车辆清码后再判断。
+1. ~~本轮修复未实车验证~~ → **已验证（见第七节）**：仪表故障全部消失，0x316 持续供帧生效。
 2. **横向生效后的标定**：`STEER_THRESHOLD=56`（steeringPressed 灵敏度）、`steerRatio=15`（占位）、`STEER_SOFTSTART_STEP`、LatControl 参数均为占位/未标定，实车调参时注意 steeringOverride 频率。
 3. **libsafety.so 与源码漂移（既存）**：仓库的 `libsafety.so`（Sep26 构建）与当前 byd.h 源码不一致，重建后 byd 的 24 个 brake/mads 测试失败（mads 框架与 byd 模式结构性不兼容：`mads_state_update` 仅在 TX `check_relay=true` 时被调用，而 byd 的 0x3B0 原生在 bus0 不能开 check_relay，否则实车误触发 relayMalfunction 全车失能）。测试基线：旧 so + 旧 test = 8 failed；新 so = 12~24 failed。**此为测试框架问题，非车控代码缺陷**，后续单独处理。
 4. **纵向**：原车 ACC 全权负责（OP 不控纵向），OP 只做静止 resume 按键伪造（SNG）。"纵向有效果"即原车 ACC 在工作。
 5. **echo 空闲帧的风险待观察**：连续发 0x316 空闲帧是否影响 ACC 按钮（历史问题仅出现在缺 SETME 的从零构造帧，echo 帧理论上无碍，社区实现同样连续发）。
+6. **cruiseMismatch（NO_ENTRY）**：stock ACC enabled 而 OP 未 enabled 持续 6 秒触发，会阻止 engage。它与"OP 为什么没 enable"互为因果，需在 engage 链排查中一并厘清。
 
 ---
 
-## 六、经验教训
+## 六、进展追踪（2026-09-28）
+
+**状态：全部仪表告警清零 ✅，横向仍不控车 ❌（卡在 engage 链）**
+
+segment 0000001a 日志实证：
+- `0x316` 已持续发送（141 帧 idle 帧，无条件 50Hz 供帧生效）✅
+- 但全部为 disengaged idle 帧：`LKAS_Active=0`、`LKAS_ReqPrepare=0`——`selfdriveState` 全程 `disabled`
+- **OP 从未进入 enabled/engaged 状态**，carcontroller 因此不进入 prepare/torque 流程
+
+横向不控车的直接原因已从"EPS 拒绝（SteerWarning）"前移为"**engage 链未走通**"。下一步排查方向（按优先级）：
+1. `cruiseState.enabled` 上升沿是否被 selfdrived 捕获（上升沿发生时 OP 是否已完成初始化、有无 NO_ENTRY 事件在场）
+2. sunnypilot MADS 的启用语义（MADS 键 = cruise 主开关？是否需要额外 UI 开关）
+3. `cruiseMismatch`（NO_ENTRY）与"OP 未 enable"的先后关系（互为因果，需抓上升沿瞬间帧）
+4. buttonEvents 是否正确生成（PCM_BUTTONS 解析），pcmCruise 依赖按键上升沿
+
+---
+
+## 七、经验教训
 
 1. **改 CAN 输出前，先做字节级对拍**：抓 bus2 上相机原发帧 vs sendcan 里 OP 帧，逐字节 diff（`od`/logreader）。0x316 的所有字段问题（SETME 缺失、LaneState、Config 组合）都能在对拍中直接看出来，比推理快一个数量级。
 2. **CAN 节点要"持续供帧"而不是"按需发帧"**：车辆 ECU 对周期报文有存活监测（甚至 timeout 监测），接管某条报文的发送权后必须 50Hz 无条件续发，哪怕内容是"空闲"。断流=故障，这是这次最大的认知修正。
