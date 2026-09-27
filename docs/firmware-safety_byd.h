@@ -178,11 +178,6 @@ static bool byd_tx_hook(const CANPacket_t *to_send) {
 }
 
 static int byd_fwd_hook(int bus_num, int addr) {
-  // Song Plus DM-i: the harness cuts the camera/radar vehicle CAN, so the
-  // ONLY path between the car and the ADAS ECUs is openpilot's relay
-  // (bus 0 <-> bus 2, done here in firmware). Disabling it starves the
-  // camera and radar ('check multifunction video controller' / 'check
-  // front millimeter-wave radar').
   // Song Plus DM-i bus topology (verified from real-vehicle CAN logs):
   // bus 0 = powertrain/chassis bus (103 addresses), bus 2 = the MPC's private
   // ADAS wire (only 5 addresses, all MPC TX). The two buses share ZERO
