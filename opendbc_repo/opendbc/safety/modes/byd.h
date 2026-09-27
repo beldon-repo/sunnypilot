@@ -177,15 +177,33 @@ static bool byd_tx_hook(const CANPacket_t *msg) {
 }
 
 static bool byd_fwd_hook(int bus_num, int addr) {
-  // Song Plus DM-i gateway mode: the harness cuts the camera/radar vehicle CAN,
-  // so the panda firmware relays bus 0 <-> bus 2. Never loop OP's own spoofed
-  // LKAS (0x316) / angle (0x1E2) frames back onto the other segment.
+  // Song Plus DM-i bus topology (verified from real-vehicle CAN logs):
+  // bus 0 = powertrain/chassis (103 addresses), bus 2 = MPC's private ADAS
+  // wire (only its own 5 TX addresses). The stock car never bridges them -
+  // full-bus relaying feeds the MPC 100+ addresses its protocol has no
+  // definition for and faults it ('check multifunction video controller').
   //
-  // 0x3B0 (PCM_BUTTONS) is deliberately NOT blocked: the stalk's button
-  // presses on bus 0 must reach the MPC on bus 2, and OP's own SNG resume
-  // spoof on 0x3B0 also needs to reach the MPC. Blocking 0x3B0 makes the
-  // ACC buttons unresponsive and faults the DiPilot camera.
-  return (addr == 0x1E2U) || (addr == 0x316U);
+  // bus 2 -> bus 0: block everything (OP reads the camera bus directly and
+  // transmits the LKAS request 0x316 to the EPS itself).
+  // bus 0 -> bus 2: white-list relay of the vehicle-state messages the MPC
+  // consumes (speed/steering/gear/pedals/eps/buttons).
+  if (bus_num == 2) {
+    return true;
+  }
+  switch (addr) {
+    case 0x11FU:  // EPS steering angle
+    case 0x122U:  // wheel speeds
+    case 0x1F0U:  // ESP vehicle speed
+    case 0x12DU:  // BCM (doors/seatbelt)
+    case 0x133U:  // stalks (blinkers)
+    case 0x242U:  // drive state (gear/brake)
+    case 0x318U:  // EPS feedback
+    case 0x342U:  // pedals
+    case 0x3B0U:  // cruise buttons
+    case 0x418U:  // BSD radar
+      return false;
+  }
+  return true;
 }
 
 static safety_config byd_init(uint16_t param) {

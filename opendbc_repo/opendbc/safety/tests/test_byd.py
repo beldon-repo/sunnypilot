@@ -8,7 +8,19 @@ from opendbc.safety.tests.common import CANPackerPanda
 
 
 class BydButtonTestBase:
-  """PCM_BUTTONS (0x3B0) resume spoofing rules, shared by both steering paths."""
+  """PCM_BUTTONS (0x3B0) resume spoofing rules and white-list relay semantics,
+  shared by both steering paths."""
+
+  BYD_FWD_WHITELIST = {0x11F, 0x122, 0x1F0, 0x12D, 0x133, 0x242, 0x318, 0x342, 0x3B0, 0x418}
+
+  def test_fwd_hook(self):
+    # white-list relay semantics: bus 0 -> 2 forwards only the MPC's
+    # vehicle-state inputs; bus 2 -> 0 is fully blocked (OP transmits 0x316
+    # to the EPS itself). See byd_fwd_hook in byd.h.
+    for bus in range(3):
+      for addr in self.SCANNED_ADDRS:
+        expected = 2 if (bus == 0 and addr in self.BYD_FWD_WHITELIST) else -1
+        self.assertEqual(expected, self.safety.safety_fwd_hook(bus, addr), f"{addr=:#x} from {bus=}")
 
   def test_resume_buttons(self):
     # BTN_AccUpDown_Cmd=3 (UP_RESETSPEED) spoof is only allowed while stationary
@@ -46,9 +58,6 @@ class TestBydSafetyTorque(BydButtonTestBase, common.PandaCarSafetyTest, common.D
   # (0x316 via the fingerprint, 0x3B0 from the stalk), so relay malfunction
   # detection cannot be enabled - it would false-trigger and block all control.
   RELAY_MALFUNCTION_ADDRS = {}
-  # OP's own spoofed LKAS (0x316) / angle (0x1E2) never loop between buses.
-  # 0x3B0 (PCM_BUTTONS) is forwarded so stalk buttons reach the MPC.
-  FWD_BLACKLISTED_ADDRS = {0: [0x1E2, 0x316], 2: [0x1E2, 0x316]}
 
   GAS_PRESSED_THRESHOLD = 1  # factor 0.01 percent
 
@@ -112,7 +121,6 @@ class TestBydSafetyAngle(BydButtonTestBase, common.PandaCarSafetyTest, common.An
 
   TX_MSGS = [[0x1E2, 0], [0x3B0, 0]]  # STEERING_MODULE_ADAS, PCM_BUTTONS
   RELAY_MALFUNCTION_ADDRS = {}
-  FWD_BLACKLISTED_ADDRS = {0: [0x1E2, 0x316], 2: [0x1E2, 0x316]}
 
   GAS_PRESSED_THRESHOLD = 1
 

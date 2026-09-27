@@ -183,23 +183,34 @@ static int byd_fwd_hook(int bus_num, int addr) {
   // (bus 0 <-> bus 2, done here in firmware). Disabling it starves the
   // camera and radar ('check multifunction video controller' / 'check
   // front millimeter-wave radar').
-  // Block our own spoofed LKAS (0x316) / angle (0x1E2) frames from looping.
-  // 0x3B0 (PCM_BUTTONS) is NOT blocked: stalk buttons must reach the MPC, and
-  // OP's SNG resume spoof on 0x3B0 must also reach the MPC. Blocking 0x3B0
-  // makes ACC buttons unresponsive and faults the DiPilot camera.
+  // Song Plus DM-i bus topology (verified from real-vehicle CAN logs):
+  // bus 0 = powertrain/chassis bus (103 addresses), bus 2 = the MPC's private
+  // ADAS wire (only 5 addresses, all MPC TX). The two buses share ZERO
+  // addresses - the stock car never bridges them. Relaying the full
+  // powertrain bus to the MPC feeds it 100+ addresses its protocol has no
+  // definition for and faults it ('check multifunction video controller').
+  //
+  // So: relay bus 0 -> bus 2 with a white-list of the vehicle-state messages
+  // the MPC actually consumes (speed/steering/gear/pedals/eps/buttons).
+  // bus 2 -> bus 0 relays nothing: OP reads the camera bus directly and
+  // transmits the LKAS request (0x316) to the EPS itself.
   int bus_fwd = -1;
 
   if (bus_num == 0) {
-    bus_fwd = 2;
-  }
-
-  if (bus_num == 2) {
-    bus_fwd = 0;
-  }
-
-  bool block_msg = (addr == 0x1E2U) || (addr == 0x316U);
-  if (block_msg) {
-    bus_fwd = -1;
+    switch (addr) {
+      case 0x11FU:  // EPS steering angle
+      case 0x122U:  // wheel speeds
+      case 0x1F0U:  // ESP vehicle speed
+      case 0x12DU:  // BCM (doors/seatbelt)
+      case 0x133U:  // stalks (blinkers)
+      case 0x242U:  // drive state (gear/brake)
+      case 0x318U:  // EPS feedback
+      case 0x342U:  // pedals
+      case 0x3B0U:  // cruise buttons
+      case 0x418U:  // BSD radar
+        bus_fwd = 2;
+        break;
+    }
   }
 
   return bus_fwd;
