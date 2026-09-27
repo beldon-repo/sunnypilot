@@ -95,7 +95,6 @@ class CarState(CarStateBase):
     ret.cruiseState.speed = ret.cruiseState.speedCluster
 
     acc_control_active = bool(cp_adas.vl["ACC_CMD"]["AccControlActive"])
-    acc_req_not_standstill = bool(cp_adas.vl["ACC_CMD"]["AccReqNotStandstill"])
     standstill_state = bool(cp_adas.vl["ACC_CMD"]["StandstillState"])
     ret.cruiseState.standstill = standstill_state
     ret.cruiseState.nonAdaptive = False
@@ -103,14 +102,20 @@ class CarState(CarStateBase):
     self.res_btn_pressed = cp.vl["PCM_BUTTONS"]["BTN_AccUpDown_Cmd"] != 0
     self.counter_pcm_buttons = cp.vl["PCM_BUTTONS"]["Counter"]
 
-    # cruiseState.enabled must strictly follow the stock ACC state. AccState 7
-    # is main-on/standby on Song Plus DM-i (not engaged); AccControlActive is
-    # asserted even while disengaged on this platform, so it may only keep the
-    # cruise enabled, never turn it on by itself.
-    stock_acc_on = acc_state in (1, 2, 3, 5)
-    if not ret.cruiseState.available or ret.brakePressed or acc_state in (0, 7):
+    # cruiseState.enabled must strictly track real stock-ACC engagement: the
+    # pcmEnable rising edge on `enabled` is what engages openpilot, so a
+    # phantom-true at ignition eats the edge and ACC-on-then-SET never
+    # produces a second one. AccState=1 is ambiguous on Song Plus DM-i - the
+    # camera reports it at ignition (leftover state, SetSpeed=30, still in
+    # Park) and again after a brake disengage, while it is not commanding the
+    # car. AccControlActive (0x32e) is the reliable engagement signal observed
+    # on real drives: 0 at ignition-leftover/standby, 1 whenever the MPC
+    # actually commands ACC, including the SNG standstill hold
+    # (StandstillState=1). AccState 2/3/5 are engaged-only states.
+    stock_acc_on = acc_control_active or acc_state in (2, 3, 5)
+    if not ret.cruiseState.available or ret.brakePressed or not stock_acc_on:
       self.is_cruise_latch = False
-    elif stock_acc_on or (acc_control_active and (acc_req_not_standstill or standstill_state)):
+    else:
       self.is_cruise_latch = True
 
     ret.cruiseState.enabled = self.is_cruise_latch
