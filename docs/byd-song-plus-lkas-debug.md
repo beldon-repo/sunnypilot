@@ -241,5 +241,6 @@ ACC_MPC_STATE（0x316，50Hz，8 字节），是 **EPS 的唯一 LKAS 命令源*
 | **yysnet/opendbc**（/Users/wujiafu/Documents/op/opendbc） | 完成度最高的开源 BYD 移植：790 扭矩+echo+握手+伪 318+MRR 雷达，git 历史有字节级调试 | **仅汉 DM/EV、唐 DM 实车可控**（其余 dashcamOnly）；宋 Plus 只是识别占位 | 交叉印证源：其 `steerFaultPermanent=TorqueFailed`（注释"EPS give up all inputs until restart"）、`enabled=AccState in (3,5)`、LKASConfig 枚举与我们实测完全一致；STEER_MAX=300 从未在宋 Plus 790 通道验证。**已吸收 ddf29f8**（故障上报 UI + pressed 防抖） |
 | github_value.py（docs_site，即 yysnet 的 values.py） | 同上仓库的参数文件 | 同上 | `TORQUE_LAT_CAR` 只含汉/唐——证明 300 是汉/唐 Veoneer 通道的数 |
 | pro_values.py（docs_site） | 宋 Pro 参数草稿（"基于您提供的 CAN ID"） | 无实车验证痕迹，STEER_STEP/MSG_HZ 自相矛盾 | 仅 STEER_MAX=100 可作"族内幅值"旁证；ALLOWANCE=15 与实测矛盾，勿采纳 |
+| **opendbc_repo.byd**（liruifeng1120，sunnypilot opendbc 的 fork） | yysnet BYD 品牌同步进 SP API 的桥接仓库（2025-06），我们 port 的同族直系前辈；曾把宋 Plus 21 解除 dashcamOnly 但 4 天后停更，未走完 | 同 yysnet（汉/唐）；其 PEDAL 0-255 修复经本车日志字节验证**不适用**（本车 0x342 是 0-100 百分比量纲，静止 0.000/深刹 0.62，现系数正确）；byd.h 的 SONG_STEERING_LIMITS 是汉值占位（注释 values to be check） | 无需改动，仅确认 lineage 与"宋 Plus 从未被任何社区实现验证过"这一判断 |
 
 **方法论重申**：所有参考实现的参数对我们只有"旁证"价值；宋 Plus 的权威依据是本车实车日志（EPS 包络、AccState 语义、车速源均由本车数据定）。
