@@ -72,6 +72,12 @@ ACC_MPC_STATE（0x316，50Hz，8 字节），是 **EPS 的唯一 LKAS 命令源*
 
 [根因 7] 安全带信号编码未验证（系了安全带仍报未系）→ 阻止 engage
 [修复] seatbeltUnlatched = False（车端本身有安全带告警，OP 不重复把关）
+
+[根因 8] 0x32d 的 AccState=1 是歧义值，被当成 "ACC_ACTIVE" 用作 enabled 判定
+         → 点火瞬间（还挂着 P 档、SetSpeed=30 的残留态）enabled 就被置 True，
+           pcmEnable 上升沿在 canValid 之前被吃掉；刹车断开后的待机态也是 1，
+           每次松刹车还产生幻影上升沿 → 真正按 SET 时没有边沿，OP 永远不 engage
+[修复] enabled = AccControlActive(0x32e) or AccState in (2,3,5)（821636b）
 ```
 
 ---
@@ -89,6 +95,7 @@ ACC_MPC_STATE（0x316，50Hz，8 字节），是 **EPS 的唯一 LKAS 命令源*
 | `3021ffb` | LKAS_ReqPrepare 握手 |
 | `d9cf68f`/`b16c4a6`/`e0b6f80` | SKIP_FW_QUERY（launch_env 两份 + 进程内兜底） |
 | `8496a71` | **固件恢复全量转发 + 无条件 50Hz 发 0x316**（本轮核心） |
+| `821636b` | **cruiseState.enabled 改用 AccControlActive 判定**（AccState=1 歧义，engage 链收口） |
 
 **注意**：launch_env.sh 有**两份**——根目录版和 `sunnypilot/system/hardware/c3/launch_env.sh`（tici 实际用的是后者）。且环境变量在该设备启动链中不可靠，**card 进程内的 `os.environ.setdefault` 才是兜底**。
 
@@ -101,24 +108,49 @@ ACC_MPC_STATE（0x316，50Hz，8 字节），是 **EPS 的唯一 LKAS 命令源*
 3. **libsafety.so 与源码漂移（既存）**：仓库的 `libsafety.so`（Sep26 构建）与当前 byd.h 源码不一致，重建后 byd 的 24 个 brake/mads 测试失败（mads 框架与 byd 模式结构性不兼容：`mads_state_update` 仅在 TX `check_relay=true` 时被调用，而 byd 的 0x3B0 原生在 bus0 不能开 check_relay，否则实车误触发 relayMalfunction 全车失能）。测试基线：旧 so + 旧 test = 8 failed；新 so = 12~24 failed。**此为测试框架问题，非车控代码缺陷**，后续单独处理。
 4. **纵向**：原车 ACC 全权负责（OP 不控纵向），OP 只做静止 resume 按键伪造（SNG）。"纵向有效果"即原车 ACC 在工作。
 5. **echo 空闲帧的风险待观察**：连续发 0x316 空闲帧是否影响 ACC 按钮（历史问题仅出现在缺 SETME 的从零构造帧，echo 帧理论上无碍，社区实现同样连续发）。
-6. **cruiseMismatch（NO_ENTRY）**：stock ACC enabled 而 OP 未 enabled 持续 6 秒触发，会阻止 engage。它与"OP 为什么没 enable"互为因果，需在 engage 链排查中一并厘清。
+6. ~~**cruiseMismatch（NO_ENTRY）**~~ → **已厘清（见 6.1/根因 8）**：它是 enabled 幻影 True 的**果**；根因 8 修复后 ACC 待机态 enabled=False，计数器不再累积。注意其告警映射在本 fork 被注释（静默事件），后续若再现不会在 UI 提示，排查时直接看 onroadEvents。
 
 ---
 
 ## 六、进展追踪（2026-09-28）
 
-**状态：全部仪表告警清零 ✅，横向仍不控车 ❌（卡在 engage 链）**
+**状态：全部仪表告警清零 ✅，engage 链已收口 ✅（根因 8 已修复），待有效路测 ❌**
 
-segment 0000001a 日志实证：
-- `0x316` 已持续发送（141 帧 idle 帧，无条件 50Hz 供帧生效）✅
-- 但全部为 disengaged idle 帧：`LKAS_Active=0`、`LKAS_ReqPrepare=0`——`selfdriveState` 全程 `disabled`
-- **OP 从未进入 enabled/engaged 状态**，carcontroller 因此不进入 prepare/torque 流程
+### 6.1 上一轮遗留的 4 个排查方向——全部有答案了
 
-横向不控车的直接原因已从"EPS 拒绝（SteerWarning）"前移为"**engage 链未走通**"。下一步排查方向（按优先级）：
-1. `cruiseState.enabled` 上升沿是否被 selfdrived 捕获（上升沿发生时 OP 是否已完成初始化、有无 NO_ENTRY 事件在场）
-2. sunnypilot MADS 的启用语义（MADS 键 = cruise 主开关？是否需要额外 UI 开关）
-3. `cruiseMismatch`（NO_ENTRY）与"OP 未 enable"的先后关系（互为因果，需抓上升沿瞬间帧）
-4. buttonEvents 是否正确生成（PCM_BUTTONS 解析），pcmCruise 依赖按键上升沿
+1. **上升沿捕获**：上升沿不是丢在"OP 未初始化"，而是丢在 **enabled 在点火瞬间就被置 True**（AccState=1 残留态），此时 carState 刚出、canValid 未就绪，边沿被 `if CS.canValid` 门吞掉。见根因 8。
+2. **MADS 语义**：设备实参 `Mads=1`、`MadsUnifiedEngagementMode=1`、`MadsMainCruiseAllowed=1`。UEM 开 → pcmEnable 不被 block，engage 走原链路 ✅；MADS 会摘掉 `pcmDisable`/`pedalPressed`（踩刹车不断横向，属 sunnypilot 设计行为）。
+3. **cruiseMismatch 因果**：它是**果**不是因——enabled 幻影 True + OP 未 enable 满 6 秒即触发；且其告警映射在本 fork 被注释掉（events.py），**完全静默**，这就是"无告警但不控车"的观感来源。修掉根因 8 后不会出现。
+4. **buttonEvents**：byd carstate **根本不解析 buttonEvents**（无按键类型枚举），engage 唯一入口就是 `cruiseState.enabled` 上升沿 → `pcmEnable`。此设计成立，无需补按键。
+
+### 6.2 segment 19（09-28 凌晨，车库 D 档触发 ACC）实证——engage 链是通的
+
+- `pcmEnable` 触发 3 次，selfdrived 进入 `enabled`（22 帧）+ `overriding`（226 帧，约 4 秒）
+- **OP 确实 engage 了**。"没控车"的直接原因：全程 vEgo 0~1.4 m/s（0~5 km/h 车库挪车），且打方向触发 `steerOverride` → `overriding`，横向自然不动
+- 按钮动作实测：`PCM_BUTTONS BTN_AccUpDown_Cmd=3` 三次，随后 `AccState 3 / SetSpeed 30 / CtlActive=1 / StandSS=1`（SET 生效）
+- **至此所有日志里最高车速就是 5 km/h，从未做过一次"速度上来 + ACC 激活 + 松手"的有效路测**
+
+### 6.3 AccState 字段实测语义（字节级，route 0000001a seg 19）
+
+| 场景 | AccState | AccOn1 | CtlActive | 实际状态 |
+|---|---|---|---|---|
+| 点火瞬间（P 档） | **1** | 1 | 0 | 残留态，未激活（SetSpeed=30 是上次记忆） |
+| 刹车断开后 | **1** | 1 | 0 | 待机 |
+| 换 D 瞬间 | 2 | 1 | 1 | 过渡 |
+| 按 SET（静止激活） | 3 | 1 | 1 | **真激活**（StandSS=1） |
+| 激活后行车 | 1/3 | 1 | 1 | 真激活 |
+| 主开关关 | 0 | 0 | 0 | 关闭 |
+
+**结论：AccState=1 双义（残留/待机 vs 激活后），唯一可靠信号是 AccControlActive（0x32e）。**
+
+### 6.4 修复后的回归（录制 CAN 场景回放新逻辑）
+
+点火残留→enabled False ✅｜断开待机→False ✅｜SET→True ✅｜激活行车（AccState=1）→True ✅｜踩刹车→False ✅｜松刹车且 ACC 已断→False ✅（不再有幻影边沿）｜主开关关→available False ✅
+
+### 6.5 下一步
+
+1. **OTA 更新后做第一次有效路测**：≥30 km/h，按 ACC SET，松方向盘，观察 selfdriveState `enabled` 与方向盘扭矩（日志看 sendcan 0x316 `LKAS_Active=1` 帧是否出现）
+2. 路测若 engage 成功但方向不对/不动，再进入标定项（见遗留问题 2：STEER_THRESHOLD=56、steerRatio=15 等占位值）
 
 ---
 
@@ -133,3 +165,4 @@ segment 0000001a 日志实证：
 7. **阻止 engage 的告警是分层的**（commIssue → seatbelt → controlsMismatch → cruiseMismatch），要逐层剥掉，每剥一层才知道下一层是什么。
 8. **libsafety.so 是测试的"隐式源"**：改了 byd.h 不重建 .so 等于没改；反过来 .so 与源码漂移会让测试结果误导排查方向。改 safety 后先 `clang -shared` 重建再跑测试。
 9. **每轮测试后第一时间拉 rlog 解析**（sendcan/can/pandaStates），用户口述的"故障还在"缺少触发时序，日志里的 `states`/`events`/`SteerWarning` 时序才是定位依据。
+10. **上升沿触发型 engage，判定信号必须绑定"真实意图"**：把双义枚举值（AccState=1 既是点火残留又是激活态）当上升沿来源，等于在系统还没就绪时就把唯一一次边沿花掉——之后每个真实操作都"无事件"。碰到"某操作永远不触发"类问题，先画该信号在**每个车辆状态下的实测值表**（6.3），再谈逻辑。
