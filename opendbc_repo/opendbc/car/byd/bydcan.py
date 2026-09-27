@@ -61,13 +61,12 @@ def create_lkas_request(packer, cam_msg, apply_torque, lkas_active, lkas_req_pre
     values.update({
       "LKAS_Output": apply_torque,   # steer torque request
       "LKAS_Active": 1,
-      # The EPS only applies assist while the LKA session state reads 2
-      # (steering). Echoing the camera's standby value (1) yields frames that
-      # are accepted, checksummed, torque-echoed back in ACC_EPS_STATE
-      # MainTorque - and never actuated: routes 00000029/2a carried 1121
-      # |Output|>=30 frames at state 1 with the wheel dead still, no faults.
-      # Matches yysnet/opendbc, which forces state 2 while active.
-      "LKAS_State": 2,
+      # The actuation gate is LKAS_Config=3 (ALARM_AND_LKA session - set by the
+      # caller), NOT the state field: the working vendor build (op_byd, route
+      # 00000037) sends exactly (State=1, MPC=0, Config=3, Active=1, lanes 2/2)
+      # and steers, while our (State=2, Config=2) frames were accepted, echoed
+      # in MainTorque, never faulted below 55 units - and never moved the wheel.
+      "LKAS_State": 1,
       "LeftLaneState": 2,
       "RightLaneState": 2,
     })
@@ -75,8 +74,9 @@ def create_lkas_request(packer, cam_msg, apply_torque, lkas_active, lkas_req_pre
     values.update({
       "LKAS_Output": 0,
       "LKAS_Active": 0,
-      "LeftLaneState": 2,
-      "RightLaneState": 2,
+      # vendor idle: lanes 0/0 (no LKA target without lane detection)
+      "LeftLaneState": 0,
+      "RightLaneState": 0,
     })
 
   dat = packer.make_can_msg("ACC_MPC_STATE", 0, values)[1]

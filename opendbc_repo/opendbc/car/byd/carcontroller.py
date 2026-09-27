@@ -122,9 +122,12 @@ class CarController(CarControllerBase):
     # fields match what the DiPilot ADAS domain expects (from-scratch frames
     # fault the camera). Skip until we have seen the camera's 0x316.
     if self.frame % 2 == 0 and CS.cam_lkas:
-      # LKAS_Config=2 (LKA) whenever we ask for LKA actuation or preparation;
-      # otherwise echo the camera's value (idle=1 ALARM)
-      lkas_config = 2 if (self.lkas_active or lkas_req_prepare) else None
+      # LKAS_Config=3 (ALARM_AND_LKA) unconditionally - it is the EPS's
+      # actuation-permission session mode. The stock camera never sends it
+      # (its idle is 1/ALARM or 2), which is why echoed-Config frames arm,
+      # echo back, stay fault-free - and never actuate. Matches the working
+      # vendor build byte-for-byte (route 00000037).
+      lkas_config = 3
       return bydcan.create_lkas_request(
         self.packer, CS.cam_lkas, self.apply_torque_last, self.lkas_active,
         lkas_req_prepare, lkas_config, (self.frame // 2) % 16)
