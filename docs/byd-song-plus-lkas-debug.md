@@ -78,6 +78,14 @@ ACC_MPC_STATE（0x316，50Hz，8 字节），是 **EPS 的唯一 LKAS 命令源*
            pcmEnable 上升沿在 canValid 之前被吃掉；刹车断开后的待机态也是 1，
            每次松刹车还产生幻影上升沿 → 真正按 SET 时没有边沿，OP 永远不 engage
 [修复] enabled = AccControlActive(0x32e) or AccState in (2,3,5)（821636b）
+
+[根因 9] 0x316 扭矩请求量程按社区汉平台照搬 STEER_MAX=300，但宋的 EPS 只容忍很小的请求
+         → route 0000001c seg0：握手 40ms 全通（ReqPrepare → LKAS_Prepared），激活后
+           扭矩爬升 ~0.7s 到 64 时 EPS 锁存 TorqueFailed；OP 不监控该故障继续发
+           Act=1 + 更大扭矩 → 整段路 TQFail 锁存，此后每次 engage 只是在向故障 EPS
+           重发 ReqPrepare，永不 armed → engaged 绿框但方向盘零扭矩
+[修复] STEER_MAX 300→20（原车包络）、软启动放缓、TorqueFailed 即完全退让、
+       STEER_THRESHOLD 56→80（±356 原始量程下 56 导致全程 overriding）（1527e60）
 ```
 
 ---
@@ -96,6 +104,7 @@ ACC_MPC_STATE（0x316，50Hz，8 字节），是 **EPS 的唯一 LKAS 命令源*
 | `d9cf68f`/`b16c4a6`/`e0b6f80` | SKIP_FW_QUERY（launch_env 两份 + 进程内兜底） |
 | `8496a71` | **固件恢复全量转发 + 无条件 50Hz 发 0x316**（本轮核心） |
 | `821636b` | **cruiseState.enabled 改用 AccControlActive 判定**（AccState=1 歧义，engage 链收口） |
+| `1527e60` | **STEER_MAX 300→20 + TorqueFailed 退让 + THRESHOLD 56→80**（EPS 扭矩故障锁存根因） |
 
 **注意**：launch_env.sh 有**两份**——根目录版和 `sunnypilot/system/hardware/c3/launch_env.sh`（tici 实际用的是后者）。且环境变量在该设备启动链中不可靠，**card 进程内的 `os.environ.setdefault` 才是兜底**。
 
@@ -151,6 +160,36 @@ ACC_MPC_STATE（0x316，50Hz，8 字节），是 **EPS 的唯一 LKAS 命令源*
 
 1. **OTA 更新后做第一次有效路测**：≥30 km/h，按 ACC SET，松方向盘，观察 selfdriveState `enabled` 与方向盘扭矩（日志看 sendcan 0x316 `LKAS_Active=1` 帧是否出现）
 2. 路测若 engage 成功但方向不对/不动，再进入标定项（见遗留问题 2：STEER_THRESHOLD=56、steerRatio=15 等占位值）
+
+### 6.6 路测 2（route 0000001c，OTA 821636b 生效后）——engage 全通，倒在 EPS 扭矩锁存
+
+821636b 修复实车生效：`pcmEnable` 触发 13 次，绿框（MADS enabled）出现，enabled+overriding 数千帧——**engage 链在实车上完全打通** ✅。
+
+但方向盘零扭矩。逐帧解码（seg0 t=17.3-18.7）：
+
+```
+17.359 TX Prep=1 Cfg=2        ← ReqPrepare 请求
+17.397 RX EPS_Prep=1          ← EPS 40ms 内 armed，握手全通 ✅
+17.400 TX Act=1 Out=0         ← 激活，软启动爬升（100Hz 步进 9 → ~900/s）
+17.4-18.1 Out 振荡 -41↔+64（驾驶员持续对抗 stq -14~-50，STEER_THRESHOLD=56 过低）
+18.116 RX EPS_Prep=0 TQFail=1 ← 请求过 ~64 的瞬间 EPS 锁存扭矩故障
+18.119+ TX Act=1 Out=105+     ← carcontroller 不监控 TQFail，继续锤
+→ seg1-4 全程 TQFail=1，ReqPrepare 无人应答，零扭矩直到熄火
+```
+
+要点：
+1. **握手协议本身是对的**，EPS 40ms 应答；故障点是请求量纲/速率，不是协议
+2. EPS 锁存 TorqueFailed 后**直到下次点火循环才清除**（seg0 开头 TQFail=0 证明点火清除）——路测失败后必须熄火重启再测
+3. STEER_THRESHOLD=56 在 ±356 原始量程下形同虚设（脱手噪声 <50，轻握 60-150），engaged 时长 70% 处于 overriding
+4. 社区 BYD_Files 的 STEER_MAX=300 是汉平台的值；宋 EPS 实测 ~64 即故障，原车相机只用 ±10-14
+
+1527e60 修复：STEER_MAX 300→20（原车包络）、软启动 0.4s 爬满、TQFail 完全退让、THRESHOLD 56→80。**预期路测观感：方向盘力度与原车 LKA 相当（轻）**——先验证链路，确认无 TQFail 后再按日志逐步放开 STEER_MAX。
+
+### 6.7 下一步（更新）
+
+1. OTA 到 1527e60+，**熄火几分钟再点火**（清除 EPS 的 TQFail 锁存）
+2. 路测：≥30 km/h 按 SET，双手完全离盘。日志验证点：RX `TorqueFailed` 保持 0、TX `LKAS_Active=1` 且 `LKAS_Output` ≤20、EPS `LKAS_Prepared=1` 持续
+3. 若链路通但力度不够 → 逐步上调 STEER_MAX（20→40→…），每次以"无 TQFail"为准入；同步核对 byd.h 上限（当前 300 不变即可）
 
 ---
 
