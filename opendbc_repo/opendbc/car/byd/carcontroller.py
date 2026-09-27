@@ -52,31 +52,41 @@ class CarController(CarControllerBase):
     """Default torque path: steer via the LKAS_Output request in ACC_MPC_STATE (790)."""
     lat_active = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill
 
+    # A latched EPS TorqueFailed (real drive, route 0000001c seg 0: fault fired
+    # ~0.7 s into the torque ramp while the driver resisted, then stayed
+    # latched) invalidates everything - stand down to plain idle echo, no
+    # LKAS_Active and no ReqPrepare, until the EPS clears it. Never treat a
+    # stale LKAS_Prepared as armed across the fault.
+    if CS.torque_failed:
+      self.lkas_active = False
+
     # engage only when the EPS reports the stock LKA prepared; deactivate otherwise
-    if lat_active and not self.lkas_active:
+    if lat_active and not self.lkas_active and not CS.torque_failed:
       if CS.lkas_prepared:
         self.lkas_active = True
         self.steer_softstart_limit = 0
     elif not lat_active:
       self.lkas_active = False
 
-    apply_torque = 0
     lkas_req_prepare = 0
     if self.lkas_active:
-      # actuators.torque is normalized to [-1, 1]
-      new_torque = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
-      new_torque = min(max(new_torque, -self.steer_softstart_limit, -CarControllerParams.STEER_MAX),
-                       self.steer_softstart_limit)
-      if self.steer_softstart_limit < CarControllerParams.STEER_MAX:
-        self.steer_softstart_limit += CarControllerParams.STEER_SOFTSTART_STEP
+      # compute at the 50 Hz command rate so the per-command delta limits match
+      # the firmware safety model exactly (the control loop runs at 100 Hz)
+      if self.frame % 2 == 0:
+        # actuators.torque is normalized to [-1, 1]
+        new_torque = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
+        new_torque = min(max(new_torque, -self.steer_softstart_limit, -CarControllerParams.STEER_MAX),
+                         self.steer_softstart_limit)
+        if self.steer_softstart_limit < CarControllerParams.STEER_MAX:
+          self.steer_softstart_limit += CarControllerParams.STEER_SOFTSTART_STEP
 
-      apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last,
-                                                      CS.out.steeringTorque, CarControllerParams)
-    elif lat_active and not CS.lkas_prepared:
-      # ask the EPS to arm LKA; it responds with LKAS_Prepared in ACC_EPS_STATE
-      lkas_req_prepare = 1
-
-    self.apply_torque_last = apply_torque
+        self.apply_torque_last = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last,
+                                                                  CS.out.steeringTorque, CarControllerParams)
+    else:
+      self.apply_torque_last = 0
+      if lat_active and not CS.lkas_prepared and not CS.torque_failed:
+        # ask the EPS to arm LKA; it responds with LKAS_Prepared in ACC_EPS_STATE
+        lkas_req_prepare = 1
 
     # 50 Hz; echo the stock camera's ACC_MPC_STATE so the SETME_* / MPC_State
     # fields match what the DiPilot ADAS domain expects (from-scratch frames

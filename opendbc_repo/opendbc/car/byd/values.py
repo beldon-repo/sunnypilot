@@ -18,17 +18,23 @@ USE_ANGLE_STEERING = False
 
 class CarControllerParams:
   # --- torque path (default), matches BYD_TORQUE_STEERING_LIMITS in byd.h ---
-  STEER_MAX = 300
+  # Route 0000001c seg 0 (09-27 real drive): the EPS latched TorqueFailed the
+  # moment the request ramped past ~64 (stock camera never exceeds +-14), and
+  # the latch only clears on ignition-off. The command ceiling therefore starts
+  # at the stock-camera envelope; raise only with logged EPS acceptance. The
+  # firmware safety limits (300/10/12) are upper bounds and stay untouched.
+  STEER_MAX = 20
   STEER_STEP = 2            # 50 Hz command rate (100 Hz control loop)
-  STEER_DELTA_UP = 10       # per command at 50 Hz; matches safety max_rate_up
-                            # (community port runs 16-17, raise only with real-vehicle validation)
-  STEER_DELTA_DOWN = 12     # per command at 50 Hz
+  STEER_DELTA_UP = 2        # per 50 Hz command; firmware safety allows 10
+  STEER_DELTA_DOWN = 4      # per 50 Hz command; firmware safety allows 12
   STEER_DRIVER_ALLOWANCE = 68
   STEER_DRIVER_MULTIPLIER = 3
   STEER_DRIVER_FACTOR = 1
   STEER_ERROR_MAX = 50
-  STEER_SOFTSTART_STEP = 9  # torque ramp-in step during soft start
-  STEER_THRESHOLD = 56      # driver torque threshold for steeringPressed (byd2 tuning)  # TODO(Song Plus DM-i): calibrate
+  STEER_SOFTSTART_STEP = 1  # per command; 0 -> full in ~0.4 s at the 50 Hz rate
+  # driver torque for steeringPressed (raw EPS scale: hands-off noise <50,
+  # light grip 60-150)
+  STEER_THRESHOLD = 80  # TODO(Song Plus DM-i): calibrate
 
   # --- angle path (experimental) ---
   # DiPilot faults when the steering request exceeds ~90 degrees,
