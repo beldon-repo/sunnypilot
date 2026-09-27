@@ -18,27 +18,26 @@ USE_ANGLE_STEERING = False
 
 class CarControllerParams:
   # --- torque path (default), matches BYD_TORQUE_STEERING_LIMITS in byd.h ---
-  # Magnitude ceiling CONFIRMED with actuating (LKAS_State=2) frames, route
-  # 00000032: 50-51 units applied cleanly and the wheel tracked them, -62
-  # latched TorqueFailed (straight, 42 km/h, light grip) - so the ceiling is
-  # between 50 and 62, and 50 is the proven value. Note the ceiling only
-  # applies with the LKA session state correct; standby (state=1) frames were
-  # never actuated at all. Firmware safety limits (300/10/12) stay untouched.
-  STEER_MAX = 50
+  # Calibration anchored to the working vendor build's live traffic (route
+  # 00000037): it steers this car with |torque| p50=67 / p90=128 / max=193
+  # within the LKAS_Config=3 session, and its per-frame steps cap at ~16
+  # (@50 Hz, its own firmware limit 17). Earlier "50-62 ceiling" readings
+  # were plausibility rules on mis-marked (Config=2/State=2) frames, not the
+  # real envelope. Our firmware safety limits (300/10/12) stay untouched as
+  # upper bounds; deltas 8/10 fit under them.
+  STEER_MAX = 200
   STEER_STEP = 2            # 50 Hz command rate (100 Hz control loop)
-  STEER_DELTA_UP = 4        # per 50 Hz command; firmware safety allows 10
-  STEER_DELTA_DOWN = 6      # per 50 Hz command; firmware safety allows 12
+  STEER_DELTA_UP = 8        # per 50 Hz command; firmware safety allows 10
+  STEER_DELTA_DOWN = 10     # per 50 Hz command; firmware safety allows 12
   STEER_DRIVER_ALLOWANCE = 68
   STEER_DRIVER_MULTIPLIER = 3
   STEER_DRIVER_FACTOR = 1
   STEER_ERROR_MAX = 50
-  STEER_SOFTSTART_STEP = 2  # per command; 0 -> full in ~0.5 s at the 50 Hz rate
-  # EPS LKAS operating envelope, real-vehicle fault map (route 0000001c/20/22):
-  # TorqueFailed latches on ANY of: |steering angle| beyond ~50 deg (three
-  # reproductions at 43-58 deg) or ~55+ units of request (one reproduction at
-  # walking speed, small angle). Within |angle| < 21 deg and <= 15 units the
-  # request ran 11 s fault-free. Gate the angle with hysteresis and keep the
-  # torque ceiling under the magnitude fault line.
+  STEER_SOFTSTART_STEP = 6  # per command; 0 -> full in ~0.67 s at the 50 Hz rate
+  # EPS LKAS fault gates, all measured on mis-marked frames (before the
+  # Config=3 session fix). They never fired in the vendor's clean steering
+  # (which has no such gates), so these are extra conservatism on top of the
+  # vendor-proven envelope - revisit if they feel intrusive.
   STEER_ANGLE_GATE_DEACT = 40.   # deg, stand down above this
   STEER_ANGLE_GATE_REARM = 30.   # deg, allow requests again below this
   # Re-arming additionally requires the wheel SETTLED: route 00000027 seg 1
@@ -85,9 +84,11 @@ class BYDCarDocs(CarDocs):
 
 @dataclass(frozen=True)
 class BYDCarSpecs(CarSpecs):
-  # specs from an independent open BYD port (Song Plus DM-i 2021-23 share these)
+  # specs cross-checked against the working vendor build's live carParams
+  # (route 00000037): mass=1926, steerRatio=19.5
   centerToFrontRatio: float = 0.44
-  steerRatio: float = 15.  # TODO(Song Plus DM-i): calibrate from real vehicle data
+  steerRatio: float = 19.5
+  mass: float = 1926.
 
 
 @dataclass
@@ -98,7 +99,7 @@ class BYDPlatformConfig(PlatformConfig):
 class CAR(Platforms):
   BYD_SONG_PLUS_DMI_22 = BYDPlatformConfig(
     [BYDCarDocs("BYD Song Plus DM-i 2022")],
-    BYDCarSpecs(mass=1785, wheelbase=2.765),
+    BYDCarSpecs(mass=1926., wheelbase=2.765),
   )
 
 

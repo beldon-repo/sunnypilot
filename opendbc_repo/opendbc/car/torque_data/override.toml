@@ -5,7 +5,7 @@ legend = ["LAT_ACCEL_FACTOR", "MAX_LAT_ACCEL_MEASURED", "FRICTION"]
 
 # BYD torque based controller (default path steers via LKAS_Output torque request);
 # values measured on the open BYD device port (Song Plus DM-i)
-"BYD_SONG_PLUS_DMI_22" = [2.2, 2.5, 0.145]
+"BYD_SONG_PLUS_DMI_22" = [2.5, 2.5, 0.10]
 "NISSAN_ALTIMA" = [nan, 1.5, nan]
 "NISSAN_LEAF_IC" = [nan, 1.5, nan]
 "NISSAN_LEAF" = [nan, 1.5, nan]
