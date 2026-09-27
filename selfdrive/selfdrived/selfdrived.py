@@ -317,8 +317,10 @@ class SelfdriveD(CruiseHelper):
       else:
         safety_mismatch = pandaState.safetyModel not in IGNORED_SAFETY_MODES
 
-      # safety mismatch allows some time for pandad to set the safety mode and publish it back from panda
-      if (safety_mismatch and self.sm.frame*DT_CTRL > 10.) or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 200:
+      # safety mismatch allows some time for pandad to set the safety mode and publish it back from panda.
+      # pandad stays in elm327 during its ELM327 firmware query phase, which can take 20+ seconds on the
+      # BYD Song Plus DM-i harness before switching to the car's safety mode.
+      if (safety_mismatch and self.sm.frame*DT_CTRL > 30.) or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 1000:
         self.events.add(EventName.controlsMismatch)
 
       if log.PandaState.FaultType.relayMalfunction in pandaState.faults:

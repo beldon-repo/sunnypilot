@@ -78,8 +78,9 @@ class CarController(CarControllerBase):
     # fields match what the DiPilot ADAS domain expects (from-scratch frames
     # fault the camera). Skip until we have seen the camera's 0x316.
     if self.frame % 2 == 0 and CS.cam_lkas:
-      # 2=LKA when active, 1=ALARM otherwise
-      lkas_config = 2 if self.lkas_active else 1
+      # 2=LKA when active; 0=DISABLE when idle, matching what the stock camera
+      # transmits while disengaged (ALARM=1 would confuse the EPS)
+      lkas_config = 2 if self.lkas_active else 0
       return bydcan.create_lkas_request(
         self.packer, CS.cam_lkas, self.apply_torque_last, self.lkas_active,
         lkas_config, (self.frame // 2) % 16)
