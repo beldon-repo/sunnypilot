@@ -61,6 +61,7 @@ class CarController(CarControllerBase):
       self.lkas_active = False
 
     apply_torque = 0
+    lkas_req_prepare = 0
     if self.lkas_active:
       # actuators.torque is normalized to [-1, 1]
       new_torque = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
@@ -71,6 +72,9 @@ class CarController(CarControllerBase):
 
       apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last,
                                                       CS.out.steeringTorque, CarControllerParams)
+    elif lat_active and not CS.lkas_prepared:
+      # ask the EPS to arm LKA; it responds with LKAS_Prepared in ACC_EPS_STATE
+      lkas_req_prepare = 1
 
     self.apply_torque_last = apply_torque
 
@@ -80,7 +84,7 @@ class CarController(CarControllerBase):
     if self.frame % 2 == 0 and CS.cam_lkas:
       return bydcan.create_lkas_request(
         self.packer, CS.cam_lkas, self.apply_torque_last, self.lkas_active,
-        (self.frame // 2) % 16)
+        lkas_req_prepare, (self.frame // 2) % 16)
     return None
 
   def _update_angle_lateral(self, CC, CS):

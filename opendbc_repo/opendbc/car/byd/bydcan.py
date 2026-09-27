@@ -35,7 +35,7 @@ _ACC_MPC_STATE_ECHO_FIELDS = [
 ]
 
 
-def create_lkas_request(packer, cam_msg, apply_torque, lkas_active, raw_cnt):
+def create_lkas_request(packer, cam_msg, apply_torque, lkas_active, lkas_req_prepare, raw_cnt):
   """50 Hz, spoofed ACC_MPC_STATE (790) carrying the LKAS torque request.
 
   Echoes the stock camera's ACC_MPC_STATE fields (SETME_*, MPC_State,
@@ -47,10 +47,13 @@ def create_lkas_request(packer, cam_msg, apply_torque, lkas_active, raw_cnt):
   - LKAS_Config/LKAS_State must be echoed from the camera: idle frames from
     the camera carry LKAS_Config=1 (ALARM), and hard-coding 0/1/2 mismatches
     what the ADAS domain expects ('check multifunction video controller').
+  - LKAS_ReqPrepare=1 must be sent while engaged until the EPS reports
+    LKAS_Prepared (ACC_EPS_STATE bit0); without it the EPS never arms and
+    LKAS_Active frames are ignored.
   """
   values = {s: cam_msg[s] for s in _ACC_MPC_STATE_ECHO_FIELDS if s in cam_msg}
   values["ReqHandsOnSteeringWheel"] = 0
-  values["LKAS_ReqPrepare"] = 0
+  values["LKAS_ReqPrepare"] = lkas_req_prepare
   values["Counter"] = raw_cnt
 
   if lkas_active:
