@@ -78,6 +78,9 @@ class CarState(CarStateBase):
 
     # steering
     ret.steeringAngleDeg = cp.vl["EPS"]["SteeringAngle"]
+    # EPS-reported wheel rate in deg/s (4 deg/s/bit, 0-1020); used by the LKAS
+    # envelope gate to tell a settled wheel from a full-lock-speed swing
+    ret.steeringRateDeg = cp.vl["EPS"]["SteeringAngleRate"]
     ret.steeringTorque = cp.vl["ACC_EPS_STATE"]["SteerDriverTorque"]
     ret.steeringTorqueEps = cp.vl["ACC_EPS_STATE"]["MainTorque"]
     # 5-frame debounce: single-frame torque noise spikes must not flap

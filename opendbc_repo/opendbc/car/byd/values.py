@@ -40,6 +40,15 @@ class CarControllerParams:
   # torque ceiling under the magnitude fault line.
   STEER_ANGLE_GATE_DEACT = 40.   # deg, stand down above this
   STEER_ANGLE_GATE_REARM = 30.   # deg, allow requests again below this
+  # Re-arming additionally requires the wheel SETTLED: route 00000027 seg 1
+  # faulted when a parking-turn unwind swept the wheel through center at
+  # ~150 deg/s - the instantaneous re-arm fired at the 0-crossing and the EPS
+  # latched TorqueFailed on a request into a full-lock-speed swing. Normal
+  # driving in the same log peaked at 129 deg/s, so re-arm needs < 40 deg/s
+  # held for 0.3 s; violent swings (> 180 deg/s) stand down at any time.
+  STEER_RATE_DEACT = 180.        # deg/s, stand down above this at any time
+  STEER_RATE_REARM = 40.         # deg/s, re-arm requires rate below this
+  STEER_ANGLE_SETTLE_FRAMES = 30  # 0.3 s at the 100 Hz control loop
   # driver torque for steeringPressed (raw EPS scale: hands-off noise <50,
   # light grip 60-150)
   STEER_THRESHOLD = 80  # TODO(Song Plus DM-i): calibrate

@@ -27,6 +27,7 @@ class CarController(CarControllerBase):
     self.brake_pressed_counter = 0
     self.brake_release_counter = 0
     self.angle_gate = False
+    self.angle_settle_counter = 0
 
     # SNG auto-resume state
     self.is_sng_check = False
@@ -53,13 +54,23 @@ class CarController(CarControllerBase):
     """Default torque path: steer via the LKAS_Output request in ACC_MPC_STATE (790)."""
     # EPS LKAS operating envelope (values.py fault map): requesting outside it
     # latches TorqueFailed until ignition-off, killing lateral for the whole
-    # drive. Large |steering angle| is one proven trigger - gate it with
-    # hysteresis and treat the gate as fully inactive.
+    # drive. Proven triggers: large |steering angle| (3 reproductions) and any
+    # request during a full-lock-speed swing (route 00000027 seg 1: a parking
+    # unwind swept the wheel through center at ~150 deg/s, the instantaneous
+    # re-arm fired at the 0-crossing, and -48 units into that swing latched
+    # the EPS). So: stand down above the angle/rate limits, and re-arm only
+    # after the wheel has SETTLED - small angle and low rate, held.
     ang = abs(CS.out.steeringAngleDeg)
-    if ang > CarControllerParams.STEER_ANGLE_GATE_DEACT:
+    rate = abs(CS.out.steeringRateDeg)
+    if ang > CarControllerParams.STEER_ANGLE_GATE_DEACT or rate > CarControllerParams.STEER_RATE_DEACT:
       self.angle_gate = True
-    elif ang < CarControllerParams.STEER_ANGLE_GATE_REARM:
-      self.angle_gate = False
+      self.angle_settle_counter = 0
+    elif self.angle_gate and ang < CarControllerParams.STEER_ANGLE_GATE_REARM and rate < CarControllerParams.STEER_RATE_REARM:
+      self.angle_settle_counter += 1
+      if self.angle_settle_counter >= CarControllerParams.STEER_ANGLE_SETTLE_FRAMES:
+        self.angle_gate = False
+    elif not (ang < CarControllerParams.STEER_ANGLE_GATE_REARM and rate < CarControllerParams.STEER_RATE_REARM):
+      self.angle_settle_counter = 0
 
     lat_active = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill \
       and not self.angle_gate
