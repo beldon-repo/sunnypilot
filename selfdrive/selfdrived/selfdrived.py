@@ -470,6 +470,10 @@ class SelfdriveD(CruiseHelper):
           # e.g. c3l clone boards without a driver monitoring camera
           self.sm.ignore_alive.append('driverCameraState')
           self.sm.ignore_valid.append('driverCameraState')
+          # dmonitord never starts without a driver camera, so its output is
+          # never published; ignore it too or selfdrived flags a comm issue
+          self.sm.ignore_alive.append('driverMonitoringState')
+          self.sm.ignore_valid.append('driverMonitoringState')
 
         if REPLAY and any(ps.controlsAllowed for ps in self.sm['pandaStates']):
           self.state_machine.state = State.enabled
