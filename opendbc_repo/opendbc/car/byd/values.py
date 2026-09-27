@@ -23,15 +23,23 @@ class CarControllerParams:
   # the latch only clears on ignition-off. The command ceiling therefore starts
   # at the stock-camera envelope; raise only with logged EPS acceptance. The
   # firmware safety limits (300/10/12) are upper bounds and stay untouched.
-  STEER_MAX = 20
+  STEER_MAX = 50
   STEER_STEP = 2            # 50 Hz command rate (100 Hz control loop)
-  STEER_DELTA_UP = 2        # per 50 Hz command; firmware safety allows 10
-  STEER_DELTA_DOWN = 4      # per 50 Hz command; firmware safety allows 12
+  STEER_DELTA_UP = 4        # per 50 Hz command; firmware safety allows 10
+  STEER_DELTA_DOWN = 6      # per 50 Hz command; firmware safety allows 12
   STEER_DRIVER_ALLOWANCE = 68
   STEER_DRIVER_MULTIPLIER = 3
   STEER_DRIVER_FACTOR = 1
   STEER_ERROR_MAX = 50
-  STEER_SOFTSTART_STEP = 1  # per command; 0 -> full in ~0.4 s at the 50 Hz rate
+  STEER_SOFTSTART_STEP = 2  # per command; 0 -> full in ~0.5 s at the 50 Hz rate
+  # EPS LKAS operating envelope, real-vehicle fault map (route 0000001c/20/22):
+  # TorqueFailed latches on ANY of: |steering angle| beyond ~50 deg (three
+  # reproductions at 43-58 deg) or ~55+ units of request (one reproduction at
+  # walking speed, small angle). Within |angle| < 21 deg and <= 15 units the
+  # request ran 11 s fault-free. Gate the angle with hysteresis and keep the
+  # torque ceiling under the magnitude fault line.
+  STEER_ANGLE_GATE_DEACT = 40.   # deg, stand down above this
+  STEER_ANGLE_GATE_REARM = 30.   # deg, allow requests again below this
   # driver torque for steeringPressed (raw EPS scale: hands-off noise <50,
   # light grip 60-150)
   STEER_THRESHOLD = 80  # TODO(Song Plus DM-i): calibrate

@@ -26,6 +26,7 @@ class CarController(CarControllerBase):
     self.lkas_brake_inhibit = False
     self.brake_pressed_counter = 0
     self.brake_release_counter = 0
+    self.angle_gate = False
 
     # SNG auto-resume state
     self.is_sng_check = False
@@ -50,7 +51,18 @@ class CarController(CarControllerBase):
 
   def _update_torque_lateral(self, CC, CS):
     """Default torque path: steer via the LKAS_Output request in ACC_MPC_STATE (790)."""
-    lat_active = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill
+    # EPS LKAS operating envelope (values.py fault map): requesting outside it
+    # latches TorqueFailed until ignition-off, killing lateral for the whole
+    # drive. Large |steering angle| is one proven trigger - gate it with
+    # hysteresis and treat the gate as fully inactive.
+    ang = abs(CS.out.steeringAngleDeg)
+    if ang > CarControllerParams.STEER_ANGLE_GATE_DEACT:
+      self.angle_gate = True
+    elif ang < CarControllerParams.STEER_ANGLE_GATE_REARM:
+      self.angle_gate = False
+
+    lat_active = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill \
+      and not self.angle_gate
 
     # A latched EPS TorqueFailed (real drive, route 0000001c seg 0: fault fired
     # ~0.7 s into the torque ramp while the driver resisted, then stayed
