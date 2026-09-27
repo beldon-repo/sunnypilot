@@ -35,22 +35,38 @@ _ACC_MPC_STATE_ECHO_FIELDS = [
 ]
 
 
-def create_lkas_request(packer, cam_msg, apply_torque, lkas_active, lkas_config, raw_cnt):
+def create_lkas_request(packer, cam_msg, apply_torque, lkas_active, raw_cnt):
   """50 Hz, spoofed ACC_MPC_STATE (790) carrying the LKAS torque request.
 
   Echoes the stock camera's ACC_MPC_STATE fields (SETME_*, MPC_State,
-  AutoFullBeam*) and overrides only LKAS_Output/LKAS_Active/Counter. The
-  SETME fields must match the camera's values or the DiPilot ADAS domain
-  faults. cam_msg comes from the camera-side bus (bus 2) CarState parser.
+  AutoFullBeam*, LKAS_Config, LKAS_State) and overrides only the torque
+  request and lane states. Verified against real-vehicle CAN logs:
+  - LeftLaneState/RightLaneState MUST be 2 or the EPS will not actuate LKA
+    (this was why lateral control did nothing while the log showed frames
+    going out).
+  - LKAS_Config/LKAS_State must be echoed from the camera: idle frames from
+    the camera carry LKAS_Config=1 (ALARM), and hard-coding 0/1/2 mismatches
+    what the ADAS domain expects ('check multifunction video controller').
   """
   values = {s: cam_msg[s] for s in _ACC_MPC_STATE_ECHO_FIELDS if s in cam_msg}
-  values["LKAS_Config"] = lkas_config          # 2=LKA when active, 1=ALARM otherwise
   values["ReqHandsOnSteeringWheel"] = 0
-  values["LKAS_Output"] = apply_torque         # steer torque request
   values["LKAS_ReqPrepare"] = 0
-  values["LKAS_Active"] = 1 if lkas_active else 0
-  values["LKAS_State"] = 2 if lkas_active else 0
   values["Counter"] = raw_cnt
+
+  if lkas_active:
+    values.update({
+      "LKAS_Output": apply_torque,   # steer torque request
+      "LKAS_Active": 1,
+      "LeftLaneState": 2,
+      "RightLaneState": 2,
+    })
+  else:
+    values.update({
+      "LKAS_Output": 0,
+      "LKAS_Active": 0,
+      "LeftLaneState": 2,
+      "RightLaneState": 2,
+    })
 
   dat = packer.make_can_msg("ACC_MPC_STATE", 0, values)[1]
   crc = byd_checksum(0xAF, dat[:-1])
