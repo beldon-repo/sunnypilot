@@ -319,3 +319,29 @@ OTA/manual pull 到 4324231 → 熄火清锁存 → **正常行驶中激活，�
 2. 力度主观评价：50 单位 ≈ 原车 LKA 的 3-5 倍，若不够再探 55-60（每次 +5，有 LKAS Fault 立停）
 3. 力度 OK → 进标定阶段（steerRatio=15、LatControl、STEER_THRESHOLD=80）
 4. 速度信号待核对：bus0 ESP_SPEED 与 GPS 稳态比 0.896（10% 低估），影响控制精度，标定阶段一并处理
+
+### 6.16 根因 11（终局）：LKAS_Config=3 出力会话模式——字节级实锤
+
+用户刷回 op_byd 厂商系统（证实能控车），route 00000037 的日志终于给出字节级模板。高扭矩激活帧逐字段对比：
+
+| 字段 | 厂商（能控车） | 我们（此前） |
+|---|---|---|
+| **LKAS_Config** | **3**（ALARM_AND_LKA 会话） | 2 ❌ |
+| **LKAS_State** | **1**（相机待机值，别动） | 2 ❌（6.12 的 state=2 改错了方向） |
+| MPC_State / Active / LaneState / SETME / AlarmType / 扭矩编码 | — | **全部一致 ✓** |
+
+**EPS 的出力许可 = LKAS_Config=3**（yysnet 枚举里的 ALARM_AND_LKA；原车相机怠速只发 1/2，从不发 3——所以 echo 永远拿不到出力许可）。此前 10 个根因全部真实存在且已修复，但都只是"让帧被接受"；最后这道会话模式门在 Config 上。
+
+厂商系统的完整画像（route 37）：
+- bus0 整套伪造 0x32D/0x32E/0x32F/0x316 各 3347 帧（50Hz 同步）+ bus2 发 0x3B0 喂相机（1339 帧，间歇）
+- 激活 0x316 = `(State=1, MPC=0, Config=3, Active=1, Lane 2/2)`；待机 = `(1,0,3,0, Lane 0/0)`
+- 0x32D AccState 跟随（1/3/0/2）、0x32E CtlActive 跟随
+
+`da3c4e2` 修复（纯 Python）：激活帧 State=1 + Config=3；待机帧 Config=3 + Lane 0/0（完整对齐厂商模板）。我们的固件本就转发相机真实 0x32D/0x32E/0x32F（byd.h fwd_hook 只 block 0x316/0x1E2），ACC 会话内容由真实相机覆盖，无需固件改动。
+
+### 6.17 最终验证清单
+
+1. 刷回我们系统（OTA 或 bundle，≥da3c4e2）
+2. 熄火清锁存 → 点火 → **开 LKA 开关**（armed 上下文，r32/r33 已证明必要）→ 激活 OP → 松手
+3. 预期：方向盘真实修正（这次是拿标准答案改的）
+4. 力度评价 → 标定阶段
