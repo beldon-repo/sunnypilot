@@ -80,7 +80,10 @@ class CarState(CarStateBase):
     ret.steeringAngleDeg = cp.vl["EPS"]["SteeringAngle"]
     ret.steeringTorque = cp.vl["ACC_EPS_STATE"]["SteerDriverTorque"]
     ret.steeringTorqueEps = cp.vl["ACC_EPS_STATE"]["MainTorque"]
-    ret.steeringPressed = bool(abs(ret.steeringTorque) > CarControllerParams.STEER_THRESHOLD)
+    # 5-frame debounce: single-frame torque noise spikes must not flap
+    # steeringPressed (they would keep selfdrived in overriding)
+    ret.steeringPressed = self.update_steering_pressed(
+      bool(abs(ret.steeringTorque) > CarControllerParams.STEER_THRESHOLD), 5)
 
     # stock ACC status; LKA is coupled to the stock ACC on this platform
     # Song Plus DM-i encodes AccState differently from Han: 1 = ACC_ACTIVE,
@@ -132,6 +135,13 @@ class CarState(CarStateBase):
 
     ret.leftBlindspot = bool(cp.vl["BSD_RADAR"]["LEFT_APPROACH"])
     ret.rightBlindspot = bool(cp.vl["BSD_RADAR"]["RIGHT_APPROACH"])
+
+    # The EPS latches TorqueFailed and gives up all steering input until it is
+    # power-cycled (real vehicle, route 0000001c/20/22; the independent
+    # yysnet/opendbc port documents the same behavior). Surface it so selfdrived
+    # alerts the driver and blocks engagement instead of silently not steering;
+    # the controller additionally stands down on the same bit.
+    ret.steerFaultPermanent = bool(cp.vl["ACC_EPS_STATE"]["TorqueFailed"])
 
     return ret, ret_sp
 
