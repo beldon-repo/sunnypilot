@@ -183,7 +183,10 @@ static int byd_fwd_hook(int bus_num, int addr) {
   // (bus 0 <-> bus 2, done here in firmware). Disabling it starves the
   // camera and radar ('check multifunction video controller' / 'check
   // front millimeter-wave radar').
-  // Block our own spoofed messages from looping between the buses.
+  // Block our own spoofed LKAS (0x316) / angle (0x1E2) frames from looping.
+  // 0x3B0 (PCM_BUTTONS) is NOT blocked: stalk buttons must reach the MPC, and
+  // OP's SNG resume spoof on 0x3B0 must also reach the MPC. Blocking 0x3B0
+  // makes ACC buttons unresponsive and faults the DiPilot camera.
   int bus_fwd = -1;
 
   if (bus_num == 0) {
@@ -194,7 +197,7 @@ static int byd_fwd_hook(int bus_num, int addr) {
     bus_fwd = 0;
   }
 
-  bool block_msg = (addr == 0x1E2U) || (addr == 0x316U) || (addr == 0x3B0U);
+  bool block_msg = (addr == 0x1E2U) || (addr == 0x316U);
   if (block_msg) {
     bus_fwd = -1;
   }

@@ -179,9 +179,13 @@ static bool byd_tx_hook(const CANPacket_t *msg) {
 static bool byd_fwd_hook(int bus_num, int addr) {
   // Song Plus DM-i gateway mode: the harness cuts the camera/radar vehicle CAN,
   // so the panda firmware relays bus 0 <-> bus 2. Never loop OP's own spoofed
-  // messages between the two segments. Matches byd_fwd_hook in
-  // docs/firmware-safety_byd.h (the source of the flashed firmware).
-  return (addr == 0x1E2U) || (addr == 0x316U) || (addr == 0x3B0U);
+  // LKAS (0x316) / angle (0x1E2) frames back onto the other segment.
+  //
+  // 0x3B0 (PCM_BUTTONS) is deliberately NOT blocked: the stalk's button
+  // presses on bus 0 must reach the MPC on bus 2, and OP's own SNG resume
+  // spoof on 0x3B0 also needs to reach the MPC. Blocking 0x3B0 makes the
+  // ACC buttons unresponsive and faults the DiPilot camera.
+  return (addr == 0x1E2U) || (addr == 0x316U);
 }
 
 static safety_config byd_init(uint16_t param) {

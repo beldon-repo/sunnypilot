@@ -46,9 +46,9 @@ class TestBydSafetyTorque(BydButtonTestBase, common.PandaCarSafetyTest, common.D
   # (0x316 via the fingerprint, 0x3B0 from the stalk), so relay malfunction
   # detection cannot be enabled - it would false-trigger and block all control.
   RELAY_MALFUNCTION_ADDRS = {}
-  # OP's own spoofed messages (0x316, 0x3B0, 0x1E2) never loop between buses;
-  # the firmware relays everything else bus 0 <-> bus 2
-  FWD_BLACKLISTED_ADDRS = {0: [0x1E2, 0x316, 0x3B0], 2: [0x1E2, 0x316, 0x3B0]}
+  # OP's own spoofed LKAS (0x316) / angle (0x1E2) never loop between buses.
+  # 0x3B0 (PCM_BUTTONS) is forwarded so stalk buttons reach the MPC.
+  FWD_BLACKLISTED_ADDRS = {0: [0x1E2, 0x316], 2: [0x1E2, 0x316]}
 
   GAS_PRESSED_THRESHOLD = 1  # factor 0.01 percent
 
@@ -112,7 +112,7 @@ class TestBydSafetyAngle(BydButtonTestBase, common.PandaCarSafetyTest, common.An
 
   TX_MSGS = [[0x1E2, 0], [0x3B0, 0]]  # STEERING_MODULE_ADAS, PCM_BUTTONS
   RELAY_MALFUNCTION_ADDRS = {}
-  FWD_BLACKLISTED_ADDRS = {0: [0x1E2, 0x316, 0x3B0], 2: [0x1E2, 0x316, 0x3B0]}
+  FWD_BLACKLISTED_ADDRS = {0: [0x1E2, 0x316], 2: [0x1E2, 0x316]}
 
   GAS_PRESSED_THRESHOLD = 1
 
