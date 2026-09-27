@@ -17,6 +17,9 @@ class CarState(CarStateBase):
     self.counter_pcm_buttons = 0
     self.eps_state_msg = {}
     self.is_cruise_latch = False
+    # stock camera's ACC_MPC_STATE (bus 2); echoed back on bus 0 by the
+    # controller so the spoofed LKAS request keeps the camera's SETME_* fields
+    self.cam_lkas = {}
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
@@ -29,6 +32,12 @@ class CarState(CarStateBase):
     self.lkas_prepared = bool(cp.vl["ACC_EPS_STATE"]["LKAS_Prepared"])
     self.torque_failed = bool(cp.vl["ACC_EPS_STATE"]["TorqueFailed"])
     self.eps_state_msg = cp.vl["ACC_EPS_STATE"]
+
+    # stock camera's ACC_MPC_STATE (bus 2); the controller echoes this frame
+    # onto bus 0 with the LKAS torque overridden. Echoing the camera's SETME_*
+    # / MPC_State fields is required - building the frame from scratch faults
+    # the DiPilot ADAS domain ('check multifunction video controller').
+    self.cam_lkas = cp_adas.vl["ACC_MPC_STATE"]
 
     # speed
     # Song Plus DM-i: the 0x122 wheel-speed message reads all zeros and the
@@ -138,6 +147,7 @@ class CarState(CarStateBase):
     adas_messages = [
       ("ACC_HUD_ADAS", 20),      # 0x32d
       ("ACC_CMD", 20),           # 0x32e
+      ("ACC_MPC_STATE", 50),     # 0x316, stock camera LKAS frame (echoed on bus 0)
     ]
     return {
       Bus.pt: CANParser(dbc, pt_messages, 0),

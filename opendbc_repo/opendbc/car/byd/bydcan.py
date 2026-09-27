@@ -22,22 +22,35 @@ def byd_checksum_xor(dat):
   return ret
 
 
-def create_lkas_request(packer, apply_torque, lkas_active, lkas_config, raw_cnt):
-  """50 Hz, spoofed ACC_MPC_STATE (790) carrying the LKAS torque request."""
-  values = {
-    "LeftLaneState": 0,
-    "RightLaneState": 0,
-    "LKAS_Config": lkas_config,          # 2=LKA when active, 1=ALARM otherwise
-    "ReqHandsOnSteeringWheel": 0,
-    "LKAS_Output": apply_torque,         # steer torque request
-    "LKAS_ReqPrepare": 0,
-    "LKAS_Active": 1 if lkas_active else 0,
-    "LKAS_State": 2 if lkas_active else 0,
-    "TrafficSignRecognition_OnOff": 0,
-    "TrafficSignRecognition_Result": -5,
-    "LKAS_AlarmType": 0,
-    "Counter": raw_cnt,
-  }
+# Fields echoed from the stock DiPilot camera's ACC_MPC_STATE so OP's spoofed
+# frame keeps the same SETME_* / MPC_State / AutoFullBeam* values the ADAS
+# domain expects. Building the message from scratch (leaving these as 0)
+# faults the camera ('check multifunction video controller' + 'ACC restricted').
+_ACC_MPC_STATE_ECHO_FIELDS = [
+  "AutoFullBeamState", "LeftLaneState", "LKAS_Config", "SETME2_0x1",
+  "MPC_State", "AutoFullBeam_OnOff", "LKAS_Output", "LKAS_Active",
+  "SETME3_0x0", "TrafficSignRecognition_OnOff", "SETME4_0x0",
+  "SETME5_0x1", "RightLaneState", "LKAS_State",
+  "TrafficSignRecognition_Result", "LKAS_AlarmType", "SETME7_0x3",
+]
+
+
+def create_lkas_request(packer, cam_msg, apply_torque, lkas_active, lkas_config, raw_cnt):
+  """50 Hz, spoofed ACC_MPC_STATE (790) carrying the LKAS torque request.
+
+  Echoes the stock camera's ACC_MPC_STATE fields (SETME_*, MPC_State,
+  AutoFullBeam*) and overrides only LKAS_Output/LKAS_Active/Counter. The
+  SETME fields must match the camera's values or the DiPilot ADAS domain
+  faults. cam_msg comes from the camera-side bus (bus 2) CarState parser.
+  """
+  values = {s: cam_msg[s] for s in _ACC_MPC_STATE_ECHO_FIELDS if s in cam_msg}
+  values["LKAS_Config"] = lkas_config          # 2=LKA when active, 1=ALARM otherwise
+  values["ReqHandsOnSteeringWheel"] = 0
+  values["LKAS_Output"] = apply_torque         # steer torque request
+  values["LKAS_ReqPrepare"] = 0
+  values["LKAS_Active"] = 1 if lkas_active else 0
+  values["LKAS_State"] = 2 if lkas_active else 0
+  values["Counter"] = raw_cnt
 
   dat = packer.make_can_msg("ACC_MPC_STATE", 0, values)[1]
   crc = byd_checksum(0xAF, dat[:-1])
