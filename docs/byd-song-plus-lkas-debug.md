@@ -368,3 +368,13 @@ op_byd 工作日志（route 37）的 carParams 与实时流量给出了完整标
 ### 6.19 最终验证步骤
 
 设备刷回我们系统（≥84e2ae8）→ 熄火清锁存 → 开 LKA → 激活 OP → 松手。预期：以厂商同级扭矩（67-128 典型值域）真实修正车道。
+
+### 6.20 厂商日志再挖——进场/退场编排与控制器内部（f3926a3）
+
+**进场编排**（route 37 seg0 逐帧）：怠速帧**不发 ReqPrepare** → engage 时 3 帧短促 prepare（60ms）→ EPS 50ms 应答 → 立即 Act=1 → 扭矩 0.24s 内 0→107（~445/s）→ 稳态保持 101-113。**退场**：Act=1 保持下斜坡 52→0（~80ms）再切 Act=0——扭矩阶跃直落是原车相机不会有的行为。
+
+**控制器内部**：lagd 关闭（useParams=False，静态 2.5/0/0.1 直接生效）、扭矩 PID 几乎不积分（i≈0）全靠前馈、1854 激活帧**零饱和**、liveParameters angleOffset=0（未做方向机偏差补偿）。
+
+**已采纳（f3926a3）**：优雅退场——latActive 消失后保持 Act=1 斜坡降扭到零（DELTA_DOWN 速率）再切 Act=0；TorqueFailed 仍瞬时硬切。进场编排暂不改（我们的持续 prepare 已验证能用）。
+
+**调参弹药归档**（尚未采纳，按需取用）：yysnet 速度相关转角速率限制器（132→64°/s 防高速画龙）；byd2 离手防退出 hack（HANDSOFF_ANGLE/PERIOD）；比亚迪3 方向机偏差通病（STEER_ANGLE_OFFSET_DEG，paramsd 可活补）；STEER_THRESHOLD 三源交叉 56/59/60（我们 80 偏高）。
