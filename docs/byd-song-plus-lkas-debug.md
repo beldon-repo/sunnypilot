@@ -242,6 +242,7 @@ ACC_MPC_STATE（0x316，50Hz，8 字节），是 **EPS 的唯一 LKAS 命令源*
 | github_value.py（docs_site，即 yysnet 的 values.py） | 同上仓库的参数文件 | 同上 | `TORQUE_LAT_CAR` 只含汉/唐——证明 300 是汉/唐 Veoneer 通道的数 |
 | pro_values.py（docs_site） | 宋 Pro 参数草稿（"基于您提供的 CAN ID"） | 无实车验证痕迹，STEER_STEP/MSG_HZ 自相矛盾 | 仅 STEER_MAX=100 可作"族内幅值"旁证；ALLOWANCE=15 与实测矛盾，勿采纳 |
 | **opendbc_repo.byd**（liruifeng1120，sunnypilot opendbc 的 fork） | yysnet BYD 品牌同步进 SP API 的桥接仓库（2025-06），我们 port 的同族直系前辈；曾把宋 Plus 21 解除 dashcamOnly 但 4 天后停更，未走完 | 同 yysnet（汉/唐）；其 PEDAL 0-255 修复经本车日志字节验证**不适用**（本车 0x342 是 0-100 百分比量纲，静止 0.000/深刹 0.62，现系数正确）；byd.h 的 SONG_STEERING_LIMITS 是汉值占位（注释 values to be check） | 无需改动，仅确认 lineage 与"宋 Plus 从未被任何社区实现验证过"这一判断 |
+| **mouxangithub/opendbc**（/Users/wujiafu/Documents/op/mouxangithub/opendbc，master-c3 分支） | mouxan 2026-09-14（`3ce9c30b 适配c3`）独立 28 平台 BYD 移植，源自"高阶Python源码_v2"（社区反混淆 DiPilot 源码，CID_*/sig_* 混淆命名）；echo 相机字段 + 0xAF 校验 + ReqPrepare 握手 + 伪 318/伪 1FC 发 MPC + 0x3B0 按键伪造 + 0x32E 全纵向（EXP_LONG）；**同 c3 硬件**，另有腾势 D9（tn 分支），活跃开发中 | **宋 Plus 21/22/23 全在 non_tested_cars，零实车验证**；"validated on real vehicles" 仅指 ATTO3（角度控制）；STEER_MAX=300/DELTA 17/ALLOWANCE 68 为汉平台值——即本车实测已推翻的那组数 | 协议层强交叉印证源：CID_HGZKCQ=0x316/CID_IQMESB=0x318/CID_RJDCMR=0x32E/CID_YHMGPU=0x3B0、校验 0xAF、echo+握手+Config/LaneState=2 全部与本文实测一致（泄露源与实车逆向互为背书）；**可借鉴**：伪 318/1FC 向 MPC 伪造 EPS LKAS 状态反馈（视频控制器故障再现时的下一杠杆）、params.toml 宋 Plus 扭矩标定参数 [2.2,2.5,0.145]（疑为原厂增益，标定阶段对照起点）、0x3B0 AccUpDown 注入；**幅值/包络勿抄**：其安全层无大转角/速率/锁定门控，落后于本分支 4324231 |
 
 **方法论重申**：所有参考实现的参数对我们只有"旁证"价值；宋 Plus 的权威依据是本车实车日志（EPS 包络、AccState 语义、车速源均由本车数据定）。
 
