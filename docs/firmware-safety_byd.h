@@ -178,34 +178,28 @@ static bool byd_tx_hook(const CANPacket_t *to_send) {
 }
 
 static int byd_fwd_hook(int bus_num, int addr) {
-  // Song Plus DM-i bus topology (verified from real-vehicle CAN logs):
-  // bus 0 = powertrain/chassis bus (103 addresses), bus 2 = the MPC's private
-  // ADAS wire (only 5 addresses, all MPC TX). The two buses share ZERO
-  // addresses - the stock car never bridges them. Relaying the full
-  // powertrain bus to the MPC feeds it 100+ addresses its protocol has no
-  // definition for and faults it ('check multifunction video controller').
-  //
-  // So: relay bus 0 -> bus 2 with a white-list of the vehicle-state messages
-  // the MPC actually consumes (speed/steering/gear/pedals/eps/buttons).
-  // bus 2 -> bus 0 relays nothing: OP reads the camera bus directly and
-  // transmits the LKAS request (0x316) to the EPS itself.
+  // Full relay bus 0 <-> bus 2: the stock camera AND front radar are fed
+  // through it (a narrow white-list was tried and starved the radar -
+  // 'check front millimeter-wave radar').
+  // Block only the LKAS/angle control frames: the camera's own 0x316 must
+  // NOT reach the EPS (OP replaces it - the controller transmits 0x316 at
+  // 50 Hz unconditionally, idle echo frames while disengaged, or the EPS's
+  // LKAS subsystem starves and faults the ADAS domain). Matches the
+  // community-verified BYD_Files firmware policy (block 0x316; we also block
+  // the unused 0x1E2 angle path; 0x32E ACC_CMD must keep flowing for stock ACC).
   int bus_fwd = -1;
 
   if (bus_num == 0) {
-    switch (addr) {
-      case 0x11FU:  // EPS steering angle
-      case 0x122U:  // wheel speeds
-      case 0x1F0U:  // ESP vehicle speed
-      case 0x12DU:  // BCM (doors/seatbelt)
-      case 0x133U:  // stalks (blinkers)
-      case 0x242U:  // drive state (gear/brake)
-      case 0x318U:  // EPS feedback
-      case 0x342U:  // pedals
-      case 0x3B0U:  // cruise buttons
-      case 0x418U:  // BSD radar
-        bus_fwd = 2;
-        break;
-    }
+    bus_fwd = 2;
+  }
+
+  if (bus_num == 2) {
+    bus_fwd = 0;
+  }
+
+  bool block_msg = (addr == 0x1E2U) || (addr == 0x316U);
+  if (block_msg) {
+    bus_fwd = -1;
   }
 
   return bus_fwd;
