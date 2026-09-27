@@ -51,6 +51,14 @@ class CarControllerParams:
   STEER_RATE_DEACT = 180.        # deg/s, stand down above this at any time
   STEER_RATE_REARM = 40.         # deg/s, re-arm requires rate below this
   STEER_ANGLE_SETTLE_FRAMES = 30  # 0.3 s at the 100 Hz control loop
+  # Route 0000002a fault 5: all five TorqueFailed latches happened seconds
+  # after a >50 deg excursion (parking-turn unwind), while two long clean
+  # windows were pure forward driving - the EPS refuses LKAS requests for a
+  # while after the wheel has been far off center (the stock camera's own LKAS
+  # state machine does the same). Lock requests out for 10 s after the last
+  # >50 deg sample, on top of the settle requirement.
+  STEER_LARGE_ANGLE = 50.        # deg, the proven fault line
+  STEER_LARGE_ANGLE_LOCKOUT = 10.  # s after the last large-angle sample
   # driver torque for steeringPressed (raw EPS scale: hands-off noise <50,
   # light grip 60-150)
   STEER_THRESHOLD = 80  # TODO(Song Plus DM-i): calibrate

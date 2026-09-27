@@ -1,5 +1,5 @@
 from opendbc.can import CANPacker
-from opendbc.car import Bus
+from opendbc.car import Bus, DT_CTRL
 from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.byd import bydcan
@@ -28,6 +28,7 @@ class CarController(CarControllerBase):
     self.brake_release_counter = 0
     self.angle_gate = False
     self.angle_settle_counter = 0
+    self.last_large_angle_frame = -10 ** 9  # far past: no boot-time lockout
 
     # SNG auto-resume state
     self.is_sng_check = False
@@ -62,10 +63,16 @@ class CarController(CarControllerBase):
     # after the wheel has SETTLED - small angle and low rate, held.
     ang = abs(CS.out.steeringAngleDeg)
     rate = abs(CS.out.steeringRateDeg)
-    if ang > CarControllerParams.STEER_ANGLE_GATE_DEACT or rate > CarControllerParams.STEER_RATE_DEACT:
+    if ang > CarControllerParams.STEER_LARGE_ANGLE:
+      # past the EPS fault line: close the gate and stamp the excursion time
       self.angle_gate = True
       self.angle_settle_counter = 0
-    elif self.angle_gate and ang < CarControllerParams.STEER_ANGLE_GATE_REARM and rate < CarControllerParams.STEER_RATE_REARM:
+      self.last_large_angle_frame = self.frame
+    elif ang > CarControllerParams.STEER_ANGLE_GATE_DEACT or rate > CarControllerParams.STEER_RATE_DEACT:
+      self.angle_gate = True
+      self.angle_settle_counter = 0
+    elif self.angle_gate and ang < CarControllerParams.STEER_ANGLE_GATE_REARM and rate < CarControllerParams.STEER_RATE_REARM \
+          and (self.frame - self.last_large_angle_frame) * DT_CTRL > CarControllerParams.STEER_LARGE_ANGLE_LOCKOUT:
       self.angle_settle_counter += 1
       if self.angle_settle_counter >= CarControllerParams.STEER_ANGLE_SETTLE_FRAMES:
         self.angle_gate = False
