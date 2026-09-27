@@ -231,3 +231,15 @@ ACC_MPC_STATE（0x316，50Hz，8 字节），是 **EPS 的唯一 LKAS 命令源*
 8. **libsafety.so 是测试的"隐式源"**：改了 byd.h 不重建 .so 等于没改；反过来 .so 与源码漂移会让测试结果误导排查方向。改 safety 后先 `clang -shared` 重建再跑测试。
 9. **每轮测试后第一时间拉 rlog 解析**（sendcan/can/pandaStates），用户口述的"故障还在"缺少触发时序，日志里的 `states`/`events`/`SteerWarning` 时序才是定位依据。
 10. **上升沿触发型 engage，判定信号必须绑定"真实意图"**：把双义枚举值（AccState=1 既是点火残留又是激活态）当上升沿来源，等于在系统还没就绪时就把唯一一次边沿花掉——之后每个真实操作都"无事件"。碰到"某操作永远不触发"类问题，先画该信号在**每个车辆状态下的实测值表**（6.3），再谈逻辑。
+
+---
+
+## 八、参考实现情报（可信度分级）
+
+| 来源 | 内容 | 验证边界 | 结论 |
+|---|---|---|---|
+| **yysnet/opendbc**（/Users/wujiafu/Documents/op/opendbc） | 完成度最高的开源 BYD 移植：790 扭矩+echo+握手+伪 318+MRR 雷达，git 历史有字节级调试 | **仅汉 DM/EV、唐 DM 实车可控**（其余 dashcamOnly）；宋 Plus 只是识别占位 | 交叉印证源：其 `steerFaultPermanent=TorqueFailed`（注释"EPS give up all inputs until restart"）、`enabled=AccState in (3,5)`、LKASConfig 枚举与我们实测完全一致；STEER_MAX=300 从未在宋 Plus 790 通道验证。**已吸收 ddf29f8**（故障上报 UI + pressed 防抖） |
+| github_value.py（docs_site，即 yysnet 的 values.py） | 同上仓库的参数文件 | 同上 | `TORQUE_LAT_CAR` 只含汉/唐——证明 300 是汉/唐 Veoneer 通道的数 |
+| pro_values.py（docs_site） | 宋 Pro 参数草稿（"基于您提供的 CAN ID"） | 无实车验证痕迹，STEER_STEP/MSG_HZ 自相矛盾 | 仅 STEER_MAX=100 可作"族内幅值"旁证；ALLOWANCE=15 与实测矛盾，勿采纳 |
+
+**方法论重申**：所有参考实现的参数对我们只有"旁证"价值；宋 Plus 的权威依据是本车实车日志（EPS 包络、AccState 语义、车速源均由本车数据定）。
