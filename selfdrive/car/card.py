@@ -27,6 +27,15 @@ from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfac
 
 REPLAY = "REPLAY" in os.environ
 
+# BYD Song Plus DM-i: the DiPilot camera (MPC) faults with 'check multifunction
+# video controller' when it sees the UDS/isotp firmware-query frames that card
+# broadcasts on the powertrain bus during startup (the panda relays them to
+# bus 2 while still in elm327 mode). The platform is fixed via the vehicle
+# selection UI (fixed_fingerprint) and CAN auto-match, so the query adds
+# nothing. Set the flag here directly - the launch_env.sh route proved
+# unreliable on this device (env var never reached the card process).
+os.environ.setdefault("SKIP_FW_QUERY", "1")
+
 EventName = log.OnroadEvent.EventName
 
 # forward
