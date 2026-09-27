@@ -18,12 +18,14 @@ USE_ANGLE_STEERING = False
 
 class CarControllerParams:
   # --- torque path (default), matches BYD_TORQUE_STEERING_LIMITS in byd.h ---
-  # Route 0000001c seg 0 (09-27 real drive): the EPS latched TorqueFailed the
-  # moment the request ramped past ~64 (stock camera never exceeds +-14), and
-  # the latch only clears on ignition-off. The command ceiling therefore starts
-  # at the stock-camera envelope; raise only with logged EPS acceptance. The
-  # firmware safety limits (300/10/12) are upper bounds and stay untouched.
-  STEER_MAX = 50
+  # Magnitude probe history: 50 units sustained for 20+ s at 22-25 km/h ran
+  # fault-free twice (routes 00000027 seg0, 00000029 seg0, with p95 at the
+  # ceiling), so the old "55-78 kills it" reading (route 0000001c) is now
+  # attributed to the walking-speed swing, not magnitude - the rate and angle
+  # gates carry that protection. 70 is the next probe (+40% over the felt-nothing
+  # 50); if it latches, the UI alert shows it and the fallback is 60/50.
+  # The firmware safety limits (300/10/12) are upper bounds and stay untouched.
+  STEER_MAX = 70
   STEER_STEP = 2            # 50 Hz command rate (100 Hz control loop)
   STEER_DELTA_UP = 4        # per 50 Hz command; firmware safety allows 10
   STEER_DELTA_DOWN = 6      # per 50 Hz command; firmware safety allows 12
