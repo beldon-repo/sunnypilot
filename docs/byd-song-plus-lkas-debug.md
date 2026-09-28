@@ -378,3 +378,25 @@ op_byd 工作日志（route 37）的 carParams 与实时流量给出了完整标
 **已采纳（f3926a3）**：优雅退场——latActive 消失后保持 Act=1 斜坡降扭到零（DELTA_DOWN 速率）再切 Act=0；TorqueFailed 仍瞬时硬切。进场编排暂不改（我们的持续 prepare 已验证能用）。
 
 **调参弹药归档**（尚未采纳，按需取用）：yysnet 速度相关转角速率限制器（132→64°/s 防高速画龙）；byd2 离手防退出 hack（HANDSOFF_ANGLE/PERIOD）；比亚迪3 方向机偏差通病（STEER_ANGLE_OFFSET_DEG，paramsd 可活补）；STEER_THRESHOLD 三源交叉 56/59/60（我们 80 偏高）。
+
+### 6.21 路测 8（flash 后 route 0-2）——根因 12：对抗性助力被拒，"完全让位"策略落地
+
+用户刷回我们系统（OTA 到 19a15135）后两段测试（LKA 开/关）。真时序（route 1/2 实为连续一段，t=0-937s）：
+
+- t=0-72：测试 1（LKA 开），OP **未 enable**——用户点火后很快按 SET，首个 enabled 上升沿被 selfdrived 就绪窗口吞掉，随后 ACC 持续 enabled 6s+ → cruiseMismatch（静默 NO_ENTRY）锁死后续 3 次 enable 尝试 → **经典 catch-22 回归**
+- t=72.6-98.9：测试 2（LKA 关），OP enable，**Config=3 帧首次真实发出**（37 帧，|Out|max=46）
+- t=98.9：TQFail 锁存——OP ramp 到 -46 时驾驶员正 +87~+138 向右打方向+踩油门（转角 20-23° 直行）。**对抗性助力被 EPS 拒绝**
+
+**8 次锁存的最终共性：OP 扭矩与驾驶员输入对抗的瞬间**（5 次直接对抗 + 3 次门控未覆盖的边角）。标准 driver-limit 公式在对抗侧仍允许 ~100 单位（对丰田成立，对宋的 EPS 不成立）。
+
+`8923742` 修复：**完全让位**——|驾驶员扭矩|>68（allowance）时请求斜坡归零并保持，安静 0.25s 后经软启动恢复。
+
+另：s0 全程 disabled 但无 TorqueFail（CAN 级确认），早前"开机残留"判断更正为 cruiseMismatch 锁死；速度对拍 ESP/GPS=0.966（正常，之前的 140 是雷达帧污染 vmax 统计的假象）。
+
+### 6.22 测试规程（固化）
+
+1. 点火后**等 15 秒**再按 SET（避开 selfdrived 就绪窗口，防 cruiseMismatch 锁死）
+2. 若 cruiseMismatch 挡住：先取消 ACC，等 3 秒，重新 SET
+3. **LKA 开关保持打开**
+4. 激活后松手，**手完全离开**（让位逻辑生效期间 OP 不与手对抗）
+5. 出现 LKAS Fault → 熄火清锁存再试，间隔至少 2 分钟
