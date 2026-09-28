@@ -5,9 +5,10 @@
 ## 一、当前状态(2026-09-29)
 
 - **里程碑已达成:成功控车**。最长连续控车 ~14 min(高速 66-72 km/h),累计 ~40 min
-- 设备代码:`45997ca`(根因 13 版)。**本地已到根因 14 + 09-29 review 修复(刹车/角度门切断恢复、重对抗 follow 探测),设备待同步**
-- **⚠️ GitHub origin 落后 5 个提交**(25da2c12/d092372/47b8c5c/cc3250f9 文档 + 本 review 修复;478cd93/45997ca 已推上)。下次网络正常时先 `git push origin main-c3l-tici`,设备用路径 1/2 同步
+- 设备代码:`45997ca`(根因 13 版)。**本地已到根因 14 + 09-29 review 修复 + 厂商对齐 Phase 1(让位曲线+NN 前馈,`ec28881e7b`),设备待同步**
+- **⚠️ GitHub origin 落后本地提交**(review 修复 `ea93962414` + 厂商对齐 `ec28881e7b` + 文档等)。下次网络正常时先 `git push origin main-c3l-tici`,设备用路径 1/2 同步
 - 已知遗留:①行驶中 EPS 偶发 TorqueFailed 锁存(根因 14 守卫+同向跟随已部署,**未路测验证**);②车速信号 bus0 ESP_SPEED 比 GPS 低 ~10%(稳态比 0.966);③libsafety.so 与 byd.h 漂移致 24 个测试失败(测试框架问题)
+- **新路线:厂商方案对齐**(2026-09-29 确立)——op_byd 已运行时解密,结论/设计/待办全在 **`byd-vendor-alignment.md`**,纵向(Phase 2)设计已备好未实施
 
 ## 二、代码部署三路径(按优先级)
 
@@ -62,16 +63,20 @@ ssh comma@<设备IP> 'cd /data/openpilot && git fetch /data/b.bundle main-c3l-ti
 
 ## 五、待办(优先级序)
 
-1. **路测验证静默守卫+同向跟随(根因 14 + 09-29 review 修复)**:若仍锁存,拉日志看锁存前 |req| 是否=0 超 0.16s(守卫应已先退场)、或对向帧是否存在(跟随应已翻转方向);顺带确认静默退场后 re-arm 是直接还是走 3 帧 prepare 突发(看 EPS 是否撤 LKAS_Prepared)
-2. **手感调参**(控车稳定后):THRESHOLD 80→60-70(三源参考 56/59/60)、LatControl 手感、速率限制器(参考 yysnet 132→64°/s)
-3. **车速 10% 偏差**:bus0 ESP_SPEED vs GPS 稳态比 0.966,标定阶段修正
-4. **固件速率限**:当前 10/12,厂商 17/17——若修正速度不够再改(需固件重编译+刷写)
-5. libsafety.so 与 byd.h 漂移(24 测试失败),单独处理
-6. echo 空闲帧对 ACC 按钮长期影响观察
+1. **推送 + 设备同步**(`ea93962414` + `ec28881e7b` 均未推送;同步后路测前确认 `NeuralNetworkLateralControl` 参数——NN 前馈默认关,先不开做基线,再开做 A/B)
+2. **路测验证**:①根因 14 + review 修复(静默守卫+同向跟随;若仍锁存,拉日志看锁存前 |req| 是否=0 超 0.16s、或对向帧是否存在)②厂商让位曲线手感(弯道助力连续性、对抗让位平滑度);顺带确认静默退场后 re-arm 是直接还是走 3 帧 prepare 突发
+3. **Phase 2 纵向**(路测干净后启动):设计已备好,见 `byd-vendor-alignment.md` 第四节
+4. **手感调参**(控车稳定后):THRESHOLD 80→60-70(三源参考 56/59/60)、LatControl 手感、速率限制器(参考 yysnet 132→64°/s)
+5. **车速 10% 偏差**:bus0 ESP_SPEED vs GPS 稳态比 0.966,标定阶段修正
+6. **固件速率限**:当前 10/12,厂商 17/17——若修正速度不够再改(需固件重编译+刷写)
+7. libsafety.so 与 byd.h 漂移(24 测试失败),单独处理
+8. echo 空闲帧对 ACC 按钮长期影响观察
 
 ## 六、参考资产
 
+- `docs/byd-vendor-alignment.md`:**厂商对齐专项**(解密产物索引/已定论事实/Phase 1 设计/Phase 2 纵向完整设计/待办)——新 session 先读这个
 - `docs/byd-song-plus-lkas-debug.md`:13 根因全史 + 6.1-6.23 逐轮分析
 - `docs_site/op_byd_logs/`:厂商工作日志(字节模板出处)+ README + vendor_diff.py
-- 参考库已挖尽:op_byd(厂商,Pyarmor 加密但日志/参数已榨干)、yysnet/opendbc、opendbc_repo.byd、cankao 系列、高阶Python源码_v2(其 DELTA 17/17 与厂商固件互证)
+- `docs_site/op_byd_data/values.json`:厂商运行时参数 dump(NN 权重出处);解密产物在本机 `/Users/wujiafu/Documents/op/cp_byd/docs/pyarmor_decrypted/`
+- 参考库已挖尽:op_byd(厂商,已运行时解密+参数 dump)、yysnet/opendbc、opendbc_repo.byd、cankao 系列、高阶Python源码_v2(其 DELTA 17/17 与厂商固件互证)
 - 分析脚本:/tmp 会丢,常用工具已收录 docs_site/op_byd_logs/vendor_diff.py
