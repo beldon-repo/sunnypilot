@@ -1,5 +1,7 @@
 import math
 
+import numpy as np
+
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL
 from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits
@@ -165,7 +167,14 @@ class CarController(CarControllerBase):
         elif opposing:
           new_torque = 0  # detection window (~3 commands): neither fight nor sit silent
         else:
-          new_torque = demand
+          # vendor yield curve (decrypted op_byd): scale the request down
+          # smoothly as the driver's grip grows - the feel source behind the
+          # vendor's "request follows the driver, never fights" signature.
+          # Same-direction demand is scaled too (a helping hand needs less
+          # assist); the direction itself never flips here.
+          yield_factor = float(np.interp(abs(drv), CarControllerParams.STEER_YIELD_DRV_BP,
+                                         CarControllerParams.STEER_YIELD_FACTOR))
+          new_torque = int(round(demand * yield_factor))
 
         new_torque = min(max(new_torque, -self.steer_softstart_limit, -CarControllerParams.STEER_MAX),
                          self.steer_softstart_limit)
@@ -183,7 +192,13 @@ class CarController(CarControllerBase):
         # through the 3-frame prepare burst if the EPS dropped LKAS_Prepared
         # on our exit, else directly (which it does is unverified - check in
         # the road-test logs).
-        if abs(self.apply_torque_last) < 2:
+        # While opposition is being detected (or the follow flip is winding
+        # down), this guard must NOT count: the follow machinery owns the
+        # response there (flip at 0.15 s), and counting concurrently raced the
+        # silence exit by a single command frame.
+        if opposing or self.follow_counter > 0:
+          self.silence_counter = 0
+        elif abs(self.apply_torque_last) < 2:
           self.silence_counter += 1
           if self.silence_counter >= CarControllerParams.STEER_SILENCE_FRAMES:
             self.lkas_active = False

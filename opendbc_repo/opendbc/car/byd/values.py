@@ -50,6 +50,15 @@ class CarControllerParams:
   # shows opposition is rejected from drv ~18 up).
   STEER_DRIVER_OPPOSING = 15  # raw EPS driver torque: sustained demand opposition flips to follow
   STEER_FOLLOW_TORQUE = 20    # same-direction follow request while the driver has the wheel
+  # Vendor yield curve (decrypted op_byd apply_byd_steer_torque_limits): the
+  # request is scaled down smoothly as |driver torque| grows instead of the
+  # binary clip. Applied on the NORMAL path only - opposing requests still go
+  # through the detection-window/follow machinery below, so a scaled-to-zero
+  # opposing request (armed-silence) can never be emitted and the driver-limit
+  # clip zero (68 + 200/3 ~ 186.7) is unreachable by construction. Endpoint
+  # 186 keeps the curve zero co-located with that clip zero.
+  STEER_YIELD_DRV_BP = [50., 120., 186.]
+  STEER_YIELD_FACTOR = [1.0, 0.5, 0.0]
   # EPS LKAS fault gates, all measured on mis-marked frames (before the
   # Config=3 session fix). They never fired in the vendor's clean steering
   # (which has no such gates), so these are extra conservatism on top of the
