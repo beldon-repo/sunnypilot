@@ -28,6 +28,7 @@ class CarController(CarControllerBase):
     self.brake_release_counter = 0
     self.angle_gate = False
     self.angle_settle_counter = 0
+    self.driver_yield_counter = 50
     self.last_large_angle_frame = -10 ** 9  # far past: no boot-time lockout
 
     # SNG auto-resume state
@@ -107,7 +108,18 @@ class CarController(CarControllerBase):
       # compute at the 50 Hz command rate so the per-command delta limits match
       # the firmware safety model exactly (the control loop runs at 100 Hz)
       if self.frame % 2 == 0:
-        if lat_active:
+        # The Song EPS latches TorqueFailed when assist OPPOSES an active
+        # driver input - 5 of the 8 real latches happened while the driver's
+        # hand torque exceeded the allowance and the standard driver-limit
+        # clamp still let ~30-46 units of opposing assist through. Yield
+        # completely instead: past the allowance, ramp to zero and stay there
+        # until the driver quiets (below the allowance for a few frames).
+        driver_active = abs(CS.out.steeringTorque) > CarControllerParams.STEER_DRIVER_ALLOWANCE
+        if driver_active:
+          self.driver_yield_counter = 0
+        elif self.driver_yield_counter < 50:
+          self.driver_yield_counter += 1
+        if lat_active and not driver_active and self.driver_yield_counter >= 25:
           # actuators.torque is normalized to [-1, 1]
           new_torque = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
           new_torque = min(max(new_torque, -self.steer_softstart_limit, -CarControllerParams.STEER_MAX),
@@ -115,7 +127,7 @@ class CarController(CarControllerBase):
           if self.steer_softstart_limit < CarControllerParams.STEER_MAX:
             self.steer_softstart_limit += CarControllerParams.STEER_SOFTSTART_STEP
         else:
-          new_torque = 0  # graceful exit: ramp the request down, then drop Active
+          new_torque = 0  # driver fighting, disengaging, or yielding: ramp out
 
         self.apply_torque_last = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last,
                                                                   CS.out.steeringTorque, CarControllerParams)
