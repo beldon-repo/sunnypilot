@@ -101,7 +101,7 @@ class CarController(CarControllerBase):
     # ramps 52->0 over ~80 ms and then drops Active - a request step straight
     # from 50 to 0 is something the stock camera never sends)
     if lat_active and not self.lkas_active and not CS.torque_failed:
-      # arm ONLY on real demand (>= 6 units), first engage included. Drive 2
+      # arm ONLY on real demand (> 6 units), first engage included. Drive 2
       # (hour_logs_2) proved the EPS latches TorqueFailed ~0.5 s into an armed
       # (Config=3/Active=1) session whose request is zero - Re_014, Rf_015,
       # R13_003 and R15_001 all armed straight into a driver fight (ACC re-SET
@@ -129,13 +129,18 @@ class CarController(CarControllerBase):
         # parked the request at 0 mid-assist) or when the request OPPOSES the
         # driver (R16_000: -70 vs +46, under the old 68 allowance). The
         # working vendor build does neither: through entire drv>150 fights its
-        # request keeps FOLLOWING the driver - nonzero, same direction. So the
-        # yield-to-zero is gone: sustained opposition flips the request to a
-        # small same-direction follow, and the session never goes silent while
-        # the driver has the wheel.
+        # request keeps FOLLOWING the driver - nonzero, same direction.
+        # Detect opposition from INTENT (demand), not from the applied output:
+        # apply_driver_steer_torque_limits clamps opposing requests to 0 once
+        # |drv| > ~135 (68 + STEER_MAX/3), so a post-clip test is blind exactly
+        # in the heaviest fights (drive 2 measured drv 111-240) - the request
+        # would sit at 0 and re-create the armed-silence latch this guards
+        # against. Sustained opposition flips the request to a small
+        # same-direction follow; the session never goes silent or opposing
+        # while the driver has the wheel.
         drv = CS.out.steeringTorque
         demand = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
-        opposing = self.apply_torque_last * drv < 0 and abs(drv) > CarControllerParams.STEER_DRIVER_OPPOSING
+        opposing = demand * drv < 0 and abs(drv) > CarControllerParams.STEER_DRIVER_OPPOSING
         if opposing:
           self.follow_counter += 2
         elif self.follow_counter > 0:
@@ -145,8 +150,20 @@ class CarController(CarControllerBase):
         if self.follow_active and abs(drv) < CarControllerParams.STEER_DRIVER_OPPOSING:
           self.follow_active = False
           self.follow_counter = 0
-        if self.follow_active and drv != 0:
+        # Controller-local deactivations must ramp out: brake inhibit, angle
+        # gate and standstill turn lat_active off while CC.actuators.torque
+        # still carries model demand (MADS default REMAIN_ACTIVE keeps
+        # latActive true under braking), and the driver-limit clip never
+        # zeroes a same-direction request. Without this cut the armed session
+        # keeps steering through braking and into the >50 deg fault zone. The
+        # delta limits give the smooth ramp-out; the apply==0 disarm below
+        # then ends the session.
+        if not lat_active:
+          new_torque = 0
+        elif self.follow_active:
           new_torque = int(math.copysign(min(abs(demand), CarControllerParams.STEER_FOLLOW_TORQUE), drv))
+        elif opposing:
+          new_torque = 0  # detection window (~3 commands): neither fight nor sit silent
         else:
           new_torque = demand
 
@@ -162,8 +179,10 @@ class CarController(CarControllerBase):
         # raises SteerWarning ~0.2 s into armed silence and latches
         # TorqueFailed at ~0.5 s (drive 2: every latch came 0.48-0.72 s after
         # the request hit zero, 6/6). Exit returns to the idle echo - the
-        # camera's own standby state - and the next real demand re-enters
-        # through the 3-frame prepare burst.
+        # camera's own standby state - and the next real demand re-enters:
+        # through the 3-frame prepare burst if the EPS dropped LKAS_Prepared
+        # on our exit, else directly (which it does is unverified - check in
+        # the road-test logs).
         if abs(self.apply_torque_last) < 2:
           self.silence_counter += 1
           if self.silence_counter >= CarControllerParams.STEER_SILENCE_FRAMES:

@@ -463,3 +463,15 @@ op_byd 工作日志（route 37）的 carParams 与实时流量给出了完整标
 用户反馈 5 点对照：①ACC 先开/机器后加载/退出 ACC 后出现 → ACC 退出-重 SET 间隙驾驶员持盘时旧代码 armed-零（已修）；②脚刹退出设备仍工作 → MADS 设计行为 + brake_inhibit 退场，armed-零已消除；③MADS 开→关：6 处锁存窗口内无 MADS 切换证据，均可由 ①②机理解释；④力度要大才感觉得到 → 旧让位归零 + 退场重置软启动的断续（已修）；⑤弯道跑出车道 → 同 ④（弯中轻握触发让位归零）+ 软启动慢，待实车复测，若残留再查角度门（40°）。
 
 验证：`replay_latches.py` 把 6 处实车时间线灌回新控制器——9/9 场景干净（armed-零 ≤0.02s、对向暴露 ≤0.16s 且幅度递减、真静默 0.14s 退场、±40 脱手噪声不触发任何锁存条件）。**待实车验证**：OTA ≥ 本修复，熄火清锁存，按 6.22 规程测试。
+
+### 6.25 控车后代码 review（2026-09-29，2 个 bug + 1 个验证盲区，均已模拟复现并修复）
+
+对 478cd93..47b8c5c（根因 14 修复）逐帧审查，用 replay 框架实测：
+
+1. **严重回归：刹车/角度门/静止不再切断出力**——新计算块丢了旧 `else: new_torque=0` 隐含的 `lat_active` 条件。MADS 默认 `REMAIN_ACTIVE`（`sunnypilot/mads/helpers.py`，刹车不掉 CC.latActive）→ 模拟中刹车全程 armed 出力 60（brake_inhibit 名存实亡，与 6.24 用户反馈②"brake_inhibit 退场"矛盾）；转角过 40° 关门后 armed 会话继续向 >50° 故障区出力（3 次实锁场景）。修复：follow 分支前加 `if not lat_active: new_torque = 0`——delta 限幅给平滑斜坡，`apply==0` 退场条件收尾。
+2. **高：重对抗（|drv|≳135）follow 永不触发 → armed-零循环复发**——`opposing` 用截幅后 `apply_torque_last`，而 driver-limit 公式在 |drv| > 68+200/3≈135 时把对向请求截为 0 → apply 恒 0 → 探测永假 → 静默守卫退场后 1-2 帧 re-arm（LKAS_Prepared 仍 1）→ **7 帧 armed-零 @~5Hz 循环**（模拟复现）——正是 Re_014/R13_003 锁存模式，只是被 0.16s 守卫切段。实车对抗 111-240 恰在盲区；旧 replay 的 Rf_015-2nd 从 drv=-120 起步让探测 bootstrapped，躲过盲区。修复：`opposing = demand * drv < 0 and abs(drv) > 15`（从截幅前意图探测），探测窗口期（~3 命令）发 0 不发 demand。
+3. **中：replay 判定线松于自家实测锁存线**——`worst_opp ≤ 12` 命令帧（0.24s）vs R16 实测 ~0.14s 锁存。收紧到 ≤7 命令帧，docstring 单位更正（命令帧非 compute 帧），新增 heavy-fight(160)/Rf_015-heavy(-200)/brake-inhibit/angle-gate 四场景。
+
+验证：修复后 **13/13 场景干净**——原 9 场景保持（R16 对向暴露 0.16→0.10s），重对抗 armed-零 ≤0.04s 且 follow 正常 ±20 同向，刹车/角度门均斜坡退场。顺带修正：softstart 实际斜坡受 DELTA_UP=8 限为 ~0.5s（非 0.4s）；`drv != 0` 死守卫已删；ops.md 的 13 根因时代规则（>2s 静默、|drv|>68 让位）已同步到根因 14 规则。
+
+**遗留观察（路测盯）**：①`STEER_DRIVER_OPPOSING=15` 在脱手噪声带（<50）内，粗糙路面脱手时 follow 可能随噪声反复触发——请求从车道需求跌到 ±20 随噪声摆向，⑤"弯道跑出车道"可能换形式复发；若复现，激活改连续对向帧计数 + 释放加迟滞（阈值本身有 R16 drv 18-46 支撑，勿调高）。②静默退场→re-arm 的 Config 3↔idle 节律（缓弯 ~1Hz）未对 ADAS 域验证；re-arm 走直接还是 prepare 突发取决于 EPS 是否撤 LKAS_Prepared，路测日志确认。
