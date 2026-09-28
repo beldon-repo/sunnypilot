@@ -33,7 +33,17 @@ class CarControllerParams:
   STEER_DRIVER_MULTIPLIER = 3
   STEER_DRIVER_FACTOR = 1
   STEER_ERROR_MAX = 50
-  STEER_SOFTSTART_STEP = 6  # per command; 0 -> full in ~0.67 s at the 50 Hz rate
+  STEER_SOFTSTART_STEP = 10  # per command; 0 -> full in ~0.4 s at the 50 Hz rate (vendor ramps ~9/frame)
+  # Drive 2 (hour_logs_2) EPS latch rules, byte-proven 6/6: an armed
+  # (Config=3/Active=1) session latches TorqueFailed when its request sits at
+  # ~zero for ~0.5 s (SteerWarning fires ~0.2 s in first; the 6 latches came
+  # 0.48-0.72 s after the request hit zero) or when the request OPPOSES the
+  # driver (R16_000: -70 vs +46, under the old 68 allowance). The vendor build
+  # never does either - its request follows the driver, nonzero, through
+  # drv>150 fights. These gate both failure modes at the controller.
+  STEER_SILENCE_FRAMES = 8    # 50 Hz commands: ~0.16 s of armed |request| < 2 -> exit session
+  STEER_DRIVER_OPPOSING = 15  # raw EPS driver torque: sustained opposition flips to follow
+  STEER_FOLLOW_TORQUE = 20    # same-direction follow request while the driver has the wheel
   # EPS LKAS fault gates, all measured on mis-marked frames (before the
   # Config=3 session fix). They never fired in the vendor's clean steering
   # (which has no such gates), so these are extra conservatism on top of the

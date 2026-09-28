@@ -1,3 +1,5 @@
+import math
+
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL
 from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits
@@ -29,8 +31,8 @@ class CarController(CarControllerBase):
     self.angle_gate = False
     self.angle_settle_counter = 0
     self.silence_counter = 0
-    self.silence_exit = False
-    self.driver_yield_counter = 50
+    self.follow_counter = 0
+    self.follow_active = False
     self.last_large_angle_frame = -10 ** 9  # far past: no boot-time lockout
 
     # SNG auto-resume state
@@ -99,13 +101,19 @@ class CarController(CarControllerBase):
     # ramps 52->0 over ~80 ms and then drops Active - a request step straight
     # from 50 to 0 is something the stock camera never sends)
     if lat_active and not self.lkas_active and not CS.torque_failed:
-      # after a silence-exit, re-enter only on REAL demand (>=6 units):
-      # re-arming on zero demand just restarts the silent-armed cycle
-      if abs(CC.actuators.torque) > 0.03 or not self.silence_exit:
+      # arm ONLY on real demand (>= 6 units), first engage included. Drive 2
+      # (hour_logs_2) proved the EPS latches TorqueFailed ~0.5 s into an armed
+      # (Config=3/Active=1) session whose request is zero - Re_014, Rf_015,
+      # R13_003 and R15_001 all armed straight into a driver fight (ACC re-SET
+      # / MADS re-engage while the driver held the wheel) and sat at zero
+      # request until the EPS raised SteerWarning and latched. No demand, no
+      # session: the idle echo below is the camera's own standby state.
+      if abs(CC.actuators.torque) > 0.03:
         if CS.lkas_prepared:
           self.lkas_active = True
           self.steer_softstart_limit = 0
-          self.silence_exit = False
+          self.follow_counter = 0
+          self.follow_active = False
     elif not lat_active and self.apply_torque_last == 0:
       self.lkas_active = False
 
@@ -114,44 +122,54 @@ class CarController(CarControllerBase):
       # compute at the 50 Hz command rate so the per-command delta limits match
       # the firmware safety model exactly (the control loop runs at 100 Hz)
       if self.frame % 2 == 0:
-        # The Song EPS latches TorqueFailed when assist OPPOSES an active
-        # driver input - 5 of the 8 real latches happened while the driver's
-        # hand torque exceeded the allowance and the standard driver-limit
-        # clamp still let ~30-46 units of opposing assist through. Yield
-        # completely instead: past the allowance, ramp to zero and stay there
-        # until the driver quiets (below the allowance for a few frames).
-        driver_active = abs(CS.out.steeringTorque) > CarControllerParams.STEER_DRIVER_ALLOWANCE
-        if driver_active:
-          self.driver_yield_counter = 0
-        elif self.driver_yield_counter < 50:
-          self.driver_yield_counter += 1
-        if lat_active and not driver_active and self.driver_yield_counter >= 25:
-          # actuators.torque is normalized to [-1, 1]
-          new_torque = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
-          new_torque = min(max(new_torque, -self.steer_softstart_limit, -CarControllerParams.STEER_MAX),
-                           self.steer_softstart_limit)
-          if self.steer_softstart_limit < CarControllerParams.STEER_MAX:
-            self.steer_softstart_limit += CarControllerParams.STEER_SOFTSTART_STEP
+        # Drive 2 (hour_logs_2) pinned the EPS latch rules byte-for-byte, 6/6:
+        # an armed (Config=3/Active=1) session latches TorqueFailed when its
+        # request is ~zero for ~0.5 s (SteerWarning fires ~0.2 s in first -
+        # R10_000/R13_003 latched 0.48-0.64 s after the old yield-to-zero
+        # parked the request at 0 mid-assist) or when the request OPPOSES the
+        # driver (R16_000: -70 vs +46, under the old 68 allowance). The
+        # working vendor build does neither: through entire drv>150 fights its
+        # request keeps FOLLOWING the driver - nonzero, same direction. So the
+        # yield-to-zero is gone: sustained opposition flips the request to a
+        # small same-direction follow, and the session never goes silent while
+        # the driver has the wheel.
+        drv = CS.out.steeringTorque
+        demand = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
+        opposing = self.apply_torque_last * drv < 0 and abs(drv) > CarControllerParams.STEER_DRIVER_OPPOSING
+        if opposing:
+          self.follow_counter += 2
+        elif self.follow_counter > 0:
+          self.follow_counter -= 1
+        if self.follow_counter >= 6:
+          self.follow_active = True
+        if self.follow_active and abs(drv) < CarControllerParams.STEER_DRIVER_OPPOSING:
+          self.follow_active = False
+          self.follow_counter = 0
+        if self.follow_active and drv != 0:
+          new_torque = int(math.copysign(min(abs(demand), CarControllerParams.STEER_FOLLOW_TORQUE), drv))
         else:
-          new_torque = 0  # driver fighting, disengaging, or yielding: ramp out
+          new_torque = demand
 
+        new_torque = min(max(new_torque, -self.steer_softstart_limit, -CarControllerParams.STEER_MAX),
+                         self.steer_softstart_limit)
+        if self.steer_softstart_limit < CarControllerParams.STEER_MAX:
+          self.steer_softstart_limit += CarControllerParams.STEER_SOFTSTART_STEP
         self.apply_torque_last = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last,
-                                                                  CS.out.steeringTorque, CarControllerParams)
+                                                                  drv, CarControllerParams)
 
-        # An armed Config=3 session that goes SILENT (zero request) for more
-        # than ~2 s latches the EPS: all four mid-drive faults of the first
-        # hour fired with |request|=0 for seconds (after the driver yield or
-        # on a dead-straight road), while the working vendor build never lets
-        # its request sit at zero. Exit the session on sustained silence -
-        # the idle echo frames below are the camera's own standby state, and
-        # the next real demand re-enters through the 3-frame prepare burst.
+        # Backstop for genuine zero demand (dead-straight road, hands off): an
+        # armed session may sit at |request| < 2 for at most ~0.16 s. The EPS
+        # raises SteerWarning ~0.2 s into armed silence and latches
+        # TorqueFailed at ~0.5 s (drive 2: every latch came 0.48-0.72 s after
+        # the request hit zero, 6/6). Exit returns to the idle echo - the
+        # camera's own standby state - and the next real demand re-enters
+        # through the 3-frame prepare burst.
         if abs(self.apply_torque_last) < 2:
           self.silence_counter += 1
-          if self.silence_counter >= 100:  # 2 s at the 100 Hz loop
+          if self.silence_counter >= CarControllerParams.STEER_SILENCE_FRAMES:
             self.lkas_active = False
             self.apply_torque_last = 0
             self.silence_counter = 0
-            self.silence_exit = True
         else:
           self.silence_counter = 0
     else:
