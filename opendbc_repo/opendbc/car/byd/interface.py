@@ -2,7 +2,7 @@ from opendbc.car import get_safety_config, structs
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.byd.carcontroller import CarController
 from opendbc.car.byd.carstate import CarState
-from opendbc.car.byd.values import HUD_MULTIPLIER, USE_ANGLE_STEERING, BydSafetyFlags
+from opendbc.car.byd.values import HUD_MULTIPLIER, USE_ANGLE_STEERING, BydSafetyFlags, CarControllerParams
 
 
 class CarInterface(CarInterfaceBase):
@@ -39,4 +39,30 @@ class CarInterface(CarInterfaceBase):
     ret.minEnableSpeed = -1
     ret.stoppingDecelRate = 0.05  # reach stopping target smoothly
 
+    # OP longitudinal (AlphaLongitudinalEnabled param): transparent replacement
+    # of the stock radar's ACC_CMD/ACC_HUD/ACC_AEB on bus 0. The stock radar
+    # keeps owning the session - its frames on bus 2 stay alive and keep feeding
+    # cruiseState/pcm_cruise_check - so the engage chain above is unchanged and
+    # no reflash is needed to toggle: the firmware keys its extra TX whitelist,
+    # accel checks and 0x32D/E/F forward block off the LONGITUDINAL safety flag.
+    if alpha_long:
+      ret.openpilotLongitudinalControl = True
+      ret.safetyConfigs[0].safetyParam |= int(BydSafetyFlags.LONGITUDINAL)
+      # vendor interface params (decrypted op_byd interface.py); delay to be
+      # verified on the real car (alignment doc risk note)
+      ret.longitudinalActuatorDelay = 0.5
+      ret.vEgoStarting = 0.3
+      ret.vEgoStopping = 0.2
+      ret.startAccel = 0.4
+      ret.stoppingDecelRate = 0.03
+      # the standstill -> go transition must go through LongCtrlState.starting
+      # so the controller can pulse ACC_CMD ResumeFromStandstill
+      ret.startingState = True
+
     return ret
+
+  @staticmethod
+  def get_pid_accel_limits(CP, current_speed, cruise_speed):
+    # vendor ACCEL_MIN/MAX (base class returns -3.5/2.0; BYD commands down to
+    # -4.0 m/s2, see route 37 TX)
+    return CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX

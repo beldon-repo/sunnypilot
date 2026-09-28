@@ -940,7 +940,7 @@ class PandaSafetyTest(PandaSafetyTestBase):
         self.safety.set_controls_allowed(1)
         # TODO: this should be blocked
         no_lockout_modes = ["TestNissanSafety", "TestNissanSafetyAltEpsBus", "TestNissanLeafSafety",
-                            "TestBydSafetyTorque", "TestBydSafetyAngle"]
+                            "TestBydSafetyTorque", "TestBydSafetyAngle", "TestBydSafetyLong"]
         if current_test in no_lockout_modes and [addr, bus] in self.TX_MSGS:
           continue
         self.assertFalse(self._tx(msg), f"transmit of {addr=:#x} {bus=} from {test_name} during {current_test} was allowed")

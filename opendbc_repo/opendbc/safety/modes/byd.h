@@ -15,6 +15,14 @@
 //    STEERING_MODULE_ADAS (0x1E2) with a desired angle. Song Plus DM-i does
 //    not transmit 0x1E2, so this path is kept only as a fallback.
 //
+//  param 2 (LONGITUDINAL, combines with the default torque path): OP
+//    longitudinal control via transparent replacement of the radar's ACC
+//    frames on bus 0 - ACC_CMD (0x32E) is the radar frame with accel
+//    overridden while engaged, ACC_HUD_ADAS (0x32D) / ACC_AEB (0x32F) are
+//    relays. The stock radar stays the session owner (bus-2 frames keep
+//    feeding cruiseState); this flag adds the 0x32D/E/F TX whitelist entries,
+//    the 0x32E accel checks and the bus2->bus0 forward block for 0x32D/E/F.
+//
 // TODO(Song Plus DM-i): verify LKAS_Output scaling and driver torque
 // thresholds from real vehicle CAN logs. 0x122 is confirmed to read all
 // zeros on this car; the real speed comes from 0x1F0 ESP_SPEED. 0x122 is
@@ -22,8 +30,11 @@
 // working (it drives 0x122), but on the real car 0x1F0 overrides it.
 
 #define BYD_PARAM_ANGLE_STEERING 1
+#define BYD_PARAM_LONGITUDINAL 2
 
 static bool byd_brake_pedal_pressed = false;
+
+static void byd_mads_update(void);
 
 static void byd_rx_hook(const CANPacket_t *msg) {
 
@@ -85,7 +96,22 @@ static void byd_rx_hook(const CANPacket_t *msg) {
     uint8_t acc_state = ((msg->data[2] >> 3) & 0x7U);
     bool cruise_engaged = (acc_state != 0U) && (acc_state != 7U);
     pcm_cruise_check(cruise_engaged);
+
+    // AccOn1 22|1 is the ACC main-on flag (route 37: 1 whenever the ACC is
+    // armed or controlling, 0 only with AccState=0).
+    acc_main_on = GET_BIT(msg, 22U);
   }
+
+  byd_mads_update();
+}
+
+static void byd_mads_update(void) {
+  // MADS is normally driven from stock_ecu_check (per check_relay TX msg),
+  // but every BYD TX msg has check_relay=false - 0x316/0x3B0 are natively
+  // visible on bus 0, so relay-malfunction detection would false-trigger.
+  // Drive the MADS state machine from the rx hook instead (identical
+  // arguments to the central call in stock_ecu_check).
+  mads_state_update(vehicle_moving, acc_main_on, controls_allowed, brake_pressed || regen_braking, steering_disengage);
 }
 
 static bool byd_button_checks(const CANPacket_t *msg) {
@@ -165,6 +191,34 @@ static bool byd_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // OP longitudinal (transparent ACC replacement, param flag LONGITUDINAL):
+  // ACC_CMD (0x32E) re-broadcasts the stock radar's frame with the accel
+  // fields overridden while engaged. The echo-relay semantics differ from the
+  // hyundai-style gate: with OP disengaged the frame is the RADAR's own
+  // command (its bus-2 frames stay alive and OP relays them), so a nonzero
+  // accel with AccControlActive=1 is legitimate stock-ACC braking, not an OP
+  // injection. Rules:
+  //   - AccControlActive=1: requires controls_allowed (OP is commanding) and
+  //     accel within raw limits. Covers the stale-echo hazard too: a phantom
+  //     engaged radar cannot inject accel while OP is off.
+  //   - AccControlActive=0: relay/standby frame - accel within raw limits.
+  //   - raw 100 (0.0 m/s2, the inactive value) is always allowed.
+  if (GET_FLAG(current_safety_param, BYD_PARAM_LONGITUDINAL) && (msg->addr == 0x32EU)) {
+    // AccelCmd 0|8 (0.05, -5): raw [20, 140] = [-4.0, 2.0] m/s2, raw 100 = 0.0
+    int desired_accel_raw = (int)msg->data[0] - 100;
+    bool acc_control_active = GET_BIT(msg, 44U);
+
+    bool violation = false;
+    if (acc_control_active) {
+      violation |= !controls_allowed;
+    }
+    violation |= max_limit_check(desired_accel_raw, 40, -80);
+
+    if (violation) {
+      tx = false;
+    }
+  }
+
   if (byd_button_checks(msg)) {
     violation = true;
   }
@@ -185,7 +239,24 @@ static bool byd_fwd_hook(int bus_num, int addr) {
   // idle echo frames while disengaged, or the EPS's LKAS subsystem starves
   // and faults the ADAS domain). Matches the community-verified BYD_Files
   // firmware policy; 0x32E (ACC_CMD) must keep flowing for stock ACC.
-  return (addr == 0x1E2U) || (addr == 0x316U);
+  //
+  // Blocking is intentionally DIRECTION-AGNOSTIC (both relay directions): it
+  // also stops OP's own bus-0 TX from looping back onto bus 2, where it would
+  // collide with the stock sender of the same address.
+  (void)bus_num;
+  bool block_msg = (addr == 0x1E2U) || (addr == 0x316U);
+
+  // OP longitudinal: block the ACC domain's own frames from relaying onto
+  // bus 0 - OP re-broadcasts 0x32D/0x32E/0x32F itself (transparent
+  // replacement, vendor route 37: the stock frames must not collide with
+  // OP's on bus 0). Bus-2 RX is unaffected, so cruiseState/pcm_cruise_check
+  // keep seeing the radar's frames. Toggling the param (no LONG flag) puts
+  // the relay back to stock-ACC pass-through with no reflash.
+  if (GET_FLAG(current_safety_param, BYD_PARAM_LONGITUDINAL)) {
+    block_msg |= (addr == 0x32DU) || (addr == 0x32EU) || (addr == 0x32FU);
+  }
+
+  return block_msg;
 }
 
 static safety_config byd_init(uint16_t param) {
@@ -193,13 +264,22 @@ static safety_config byd_init(uint16_t param) {
   // OP's own messages only. Card-level CAN forwarding is disabled; the
   // firmware relay (byd_fwd_hook above) carries bus 0 <-> bus 2 traffic.
   static const CanMsg BYD_TX_MSGS_TORQUE[] = {
-    {0x316, 0, 8},  // ACC_MPC_STATE (LKAS torque request)
-    {0x3B0, 0, 8},  // PCM_BUTTONS (SNG auto-resume)
+    {.addr = 0x316, .bus = 0, .len = 8, .check_relay = false},  // ACC_MPC_STATE (LKAS torque request)
+    {.addr = 0x3B0, .bus = 0, .len = 8, .check_relay = false},  // PCM_BUTTONS (SNG auto-resume)
   };
 
   static const CanMsg BYD_TX_MSGS_ANGLE[] = {
-    {0x1E2, 0, 8},  // STEERING_MODULE_ADAS (experimental angle path)
-    {0x3B0, 0, 8},  // PCM_BUTTONS (SNG auto-resume)
+    {.addr = 0x1E2, .bus = 0, .len = 8, .check_relay = false},  // STEERING_MODULE_ADAS (experimental angle path)
+    {.addr = 0x3B0, .bus = 0, .len = 8, .check_relay = false},  // PCM_BUTTONS (SNG auto-resume)
+  };
+
+  // OP longitudinal (torque lateral + transparent ACC replacement)
+  static const CanMsg BYD_TX_MSGS_LONG[] = {
+    {.addr = 0x316, .bus = 0, .len = 8, .check_relay = false},  // ACC_MPC_STATE (LKAS torque request)
+    {.addr = 0x32D, .bus = 0, .len = 8, .check_relay = false},  // ACC_HUD_ADAS relay (camera HUD echo)
+    {.addr = 0x32E, .bus = 0, .len = 8, .check_relay = false},  // ACC_CMD (radar frame echo + OP accel override)
+    {.addr = 0x32F, .bus = 0, .len = 8, .check_relay = false},  // ACC_AEB heartbeat relay
+    {.addr = 0x3B0, .bus = 0, .len = 8, .check_relay = false},  // PCM_BUTTONS (SNG auto-resume)
   };
 
   static RxCheck byd_rx_checks_torque[] = {
@@ -225,6 +305,9 @@ static safety_config byd_init(uint16_t param) {
   if (GET_FLAG(param, BYD_PARAM_ANGLE_STEERING)) {
     SET_TX_MSGS(BYD_TX_MSGS_ANGLE, ret);
     SET_RX_CHECKS(byd_rx_checks_angle, ret);
+  } else if (GET_FLAG(param, BYD_PARAM_LONGITUDINAL)) {
+    SET_TX_MSGS(BYD_TX_MSGS_LONG, ret);
+    SET_RX_CHECKS(byd_rx_checks_torque, ret);
   } else {
     SET_TX_MSGS(BYD_TX_MSGS_TORQUE, ret);
     SET_RX_CHECKS(byd_rx_checks_torque, ret);

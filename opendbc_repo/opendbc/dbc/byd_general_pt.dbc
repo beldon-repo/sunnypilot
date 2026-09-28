@@ -171,6 +171,17 @@ BO_ 814 ACC_CMD: 8 XXX
  SG_ SETME2_0xF : 55|4@0+ (1,0) [0|15] "" XXX
  SG_ CheckSum : 56|8@1+ (1,0) [0|255] "" XXX
 
+; 0x32F ACC_AEB heartbeat, byte-verified against the vendor build's TX in
+; route 00000037 (docs_site/op_byd_logs): static payload `05 80 02 0f ff ff`,
+; 4-bit counter in byte 6 low nibble, 0xF constant in byte 6 high nibble,
+; byd_checksum(0xAF) in byte 7. PAYLOAD is little-endian so the parse->pack
+; echo round-trips byte-identical (48-bit Motorola start bit 0 does not).
+BO_ 815 ACC_AEB: 8 XXX
+ SG_ PAYLOAD : 0|48@1+ (1,0) [0|281474976710655] "" XXX
+ SG_ Counter : 48|4@1+ (1,0) [0|15] "" XXX
+ SG_ SETME4_0xF : 52|4@1+ (1,0) [0|15] "" XXX
+ SG_ CheckSum : 56|8@1+ (1,0) [0|255] "" XXX
+
 BO_ 834 PEDAL: 8 XXX
  SG_ AcceleratorPedal : 0|8@1+ (0.01,0) [0|2.55] "" XXX
  SG_ BrakePedal : 8|8@1+ (0.01,0) [0|2.55] "" XXX

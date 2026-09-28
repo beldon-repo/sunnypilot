@@ -10,6 +10,11 @@ class BydSafetyFlags(IntFlag):
   # experimental 482 camera angle path (Atto 3 style); Song Plus DM-i does not
   # transmit 0x1E2, the default (0) is the 790 LKAS_Output torque path
   ANGLE_STEERING = 1
+  # OP longitudinal control (transparent ACC_CMD/ACC_HUD/ACC_AEB replacement).
+  # Firmware gates the extra TX whitelist, the 0x32E accel checks and the
+  # 0x32D/E/F forward block on this flag, so toggling the param needs no
+  # reflash - just an OP restart (boardd re-applies the safety param).
+  LONGITUDINAL = 2
 
 
 # flip to True to use the experimental angle path instead of the default torque path
@@ -85,6 +90,18 @@ class CarControllerParams:
   # driver torque for steeringPressed (raw EPS scale: hands-off noise <50,
   # light grip 60-150)
   STEER_THRESHOLD = 80  # TODO(Song Plus DM-i): calibrate
+
+  # --- longitudinal (OP ACC_CMD), from the decrypted op_byd build and its
+  # real-vehicle TX frames (route 00000037, docs_site/op_byd_logs) ---
+  ACCEL_MIN = -4.0           # vendor ACCEL_MIN (opendbc base is -3.5)
+  ACCEL_MAX = 2.0            # vendor ACCEL_MAX; raw 140 = +2.0 was the TX cap
+  COMFORT_BAND_UPPER = 0.1   # sent only while accel >= 0 (route 37: band 0.1/0.05)
+  COMFORT_BAND_LOWER = 0.05
+  JERK_UPPER_LIMIT = 1.0     # raw 5; 692/697 active frames in route 37
+  JERK_LOWER_LIMIT = -0.8    # raw 46; vendor clip(jerk, -4, -0.8) with no plan
+                             # jerk available to us, so the calm-floor value
+  MIN_START_ACCEL = 0.2      # vendor: can_accel = max(0.2, can_accel) on resume
+  STOP_ACCEL = -4.0          # vendor: adas TOO_CLOSE -> ACCEL_MIN
 
   # --- angle path (experimental) ---
   # DiPilot faults when the steering request exceeds ~90 degrees,

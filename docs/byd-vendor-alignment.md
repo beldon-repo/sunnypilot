@@ -58,33 +58,53 @@ STEER_YIELD_FACTOR = [1.0, 0.5, 0.0]
 - 回放 13/13 干净（`docs_site/hour_logs_2/replay_latches.py`，R16 对向暴露 0.10s 持平）
 - 安全测试 24 failed 为**存量** libsafety 漂移（stash 对照确认与本改动无关，即待办 #5）
 
-## 四、Phase 2 纵向设计（未实施；实车复测干净后启动）
+## 四、Phase 2 纵向（已落码，未实车验证；开关默认关）
 
-目标形态：`openpilotLongitudinalControl=True`，OP 完全接管纵向，伪造 ACC 三件套；原车 ACC 被替代（厂商同样行为）。
+> 2026-09-29 落码。解密产物升级到 100% 覆盖 + route 37 TX 字节级验证后实施，本节是实施后的定论。
 
-厂商还原细节（置信度标注）：
-- **TX bus0 50Hz×4**：0x316（已有）/ 0x32D ACC_HUD_ADAS / 0x32E ACC_CMD / 0x32F ACC_AEB；bus2 0x3B0 按钮间歇
-- **ACC_CMD 0x32E**（15 字段）：ACCEL_CMD（DBC 0.05/-5，物理 [-4,2]）；ComfortBandUpper=0.2/Lower=-0.25；JerkUpper/LowerLimit=12（raw）；minimal_brake=-0.8（stopping）；STANDSTILL_RESUME（starting 时 1）；ACC_REQ_NOT_STANDSTILL=15；**counter 与原厂雷达 ACC_CMD 帧对齐**（acc_initial_counter_delta=-1 初始化，radar_acc_msg 取基准）(70-95%)
-- **ACC_HUD 0x32D**（16 字段）：SET_SPEED（hudControl.setSpeed）、HAS_LEAD、SET_DISTANCE、LEAD_DISTANCE、ACC_ON1/ON2 双标志、TOO_CLOSE/NOTIFY/ERROR、CRUISE_STATE、SET_ME_XFF=0xFF/XF=0xF (75%)
-- **ACC_AEB 0x32F**：PAYLOAD 心跳（实车 `05 80 02 0f...`）+ SETME_0xF=0xF (55-80%)
-- **interface 纵向参数**：longitudinalActuatorDelay=0.44、vEgoStarting=0.3、stoppingDecelRate≈0.03、radarUnavailable=True（vision lead；本车指纹无 MRR 884，`EnableRadarTracks` 真雷达功能暂不做）(65-100%)
-- **SNG**：BYDSnG param；静止后 starting 每 350ms 发 resume；BTN_ACC_DEC {NONE=0,DEC_1=1,DEC_10=2,ACC_1=3,ACC_10=4}；长按 30 帧→±10km/h (85%)
+### 4.1 厂商架构定论（推翻本节旧推断的三点）
 
-实施要点（探索已完成）：
-- **engage 链切换**：pcmCruise=False → buttonEnable 路径。需 byd carstate 补 buttonEvents 解析（当前不解析）、`car_specific.py` byd 分支 `pcm_enable=self.CP.pcmCruise`（仿 hyundai:126-128）；MADS（mads.py:134）同时接受 pcmEnable/buttonEnable 无需改；cruiseMismatch 语义变化（pcmCruise=False 时 stock ACC 开着即触发，告警映射已注释为静默）；controlsd.py:171-173 的 cancel/resume/override 语义自动生效
-- **byd.h**：TX 白名单加 0x32D/0x32E/0x32F；0x32E 走 `longitudinal_accel_checks`（参考 hyundai.h:247-266，限幅用 raw 单位 [-80, 140] = [-4,2] m/s²）；fwd_hook 改为 block 相机 0x32D/E/F（OP 长控时）；0x32F PAYLOAD 心跳帧按白名单放行即可
-- **carstate**：aEgo 用 KF 推导即可（DBC 无加速度传感器消息，已确认）；radar_acc_msg/adas_msg/aeb_msg 原帧缓存（counter 对齐 + echo）
-- **plan 取值**：本仓库 controlsd 已按 actuator delay 在 plan 上插值（CC.actuators.accel 即延迟补偿后目标）——**不需要**厂商的 get_accel_and_jerk_from_plan；JerkLimit 字段先用固定 12（厂商常量）
-- **测试**：`opendbc/safety/tests/test_byd.py` 扩 TX_MSGS + 纵向 accel 测试（参考 test_hyundai.py 模式）+ `_pcm_status_msg` 语义调整
-- 可选复用：`opendbc_repo/opendbc/sunnypilot/car/hyundai/longitudinal/` 的 jerk-limited 控制器层
-- 风险：刹车安全关键（首次 OP 控刹车）；纵向标定（delay 0.44 需实车验证）；固件 TX 白名单扩充需重刷；engage 链切换需全场景重验
+厂商是**透明替换（transparent replacement）**架构，不是"OP 完全接管"：
+1. **engage 链不切换**（推翻旧"pcmCruise=False→buttonEnable"设计）：雷达帧在 bus2 照常活跃（fwd 只挡 bus2→bus0），雷达仍是 engage/cancel 权威，`cruiseState.enabled` 的 is_cruise_latch 与 MADS 零改动
+2. **counter 50Hz 自由递增**（推翻旧"与雷达 ACC_CMD 对齐 delta=-1"）：厂商 counter 连续走 0-f 穿过 echo/active 切换，与雷达无关
+3. **ACC_HUD/ACC_AEB 是纯 echo**（旧"16 字段构造"是高估）：HUD 全字段透传相机帧（Notify 12=ENGAGE/8=DISENGAGE 可见），AEB 是静态 `05 80 02 0f ff ff` + counter + checksum；只有 ACC_CMD 在 active 时覆写加速度字段
 
-验证路线建议：低速封闭场地起步/跟停 → 开放道路低速 → 高速；全程对比原车 ACC 基线。
+### 4.2 字节级定论（route 37 TX 实测，冒烟脚本 /tmp/byd_long_smoke.py 全对上）
+
+- **0x32E ACC_CMD**：雷达帧 14 字段回声基底；active（enabled and active）时覆写：AccelCmd=OP accel（clip [-4,2]，raw [20,140]，raw100=0 m/s²）＋ ComfortBand 0.1/0.05（仅 accel≥0）＋ JerkUpper 1.0/raw5（697 帧中 692）＋ JerkLower clip(jerk,-4,-0.8)（我们无 plan jerk，固化为 -0.8）＋ AccControlActive=1；byte5 状态分布 0x48（待机 echo：control=0, accreq=1, esp=1）/0x58（active）/0x00（全关）；ResumeFromStandstill 全程 0（route37 无静止段），我们按 starting 状态发脉冲
+- **0x32D ACC_HUD**：纯 echo + counter/checksum 重打；active 顶值 `5a0c5c01f4fff059` 与厂商逐字节一致
+- **0x32F ACC_AEB**：PAYLOAD 0|48**@1+（小端——@0+ 大端在 parser/packer 两端位序不保真，往返丢 byte0）**+ counter + SETME4_0xF + checksum；echo 出 `0580020ffffff07b` = 厂商日志 x166 模式
+- **checksum 全家统一 byd_checksum(0xAF)**（0x32D/E/F 三种均用厂商字节验算吻合）
+- 雷达主动制动时（OP off、AccControlActive=1 echo）固件若按 hyundai 模式封死会拦掉原厂刹车 → byd.h 0x32E 用 echo-relay 规则：**active=1 需 controls_allowed 且限内；active=0 限内即放行**；陈旧 echo 幻影由 0x32D rx liveness 兜底
+
+### 4.3 落码清单（本分支）
+
+| 文件 | 内容 |
+|---|---|
+| `byd_general_pt.dbc` | 新增 BO_ 815 ACC_AEB（PAYLOAD LE 48bit） |
+| `values.py` | `BydSafetyFlags.LONGITUDINAL=2`；ACCEL_MIN/-4.0、COMFORT_BAND、JERK 常量 |
+| `bydcan.py` | create_accel_command 重写（回声基底+active 覆写）、create_acc_hud_command、create_acc_aeb_command |
+| `carstate.py` | adas parser +ACC_AEB@50Hz；radar_acc_msg/adas_msg/aeb_msg 缓存 |
+| `interface.py` | `openpilotLongitudinalControl=alpha_long`（AlphaLongitudinalEnabled param，无需新 UI、无需重刷切换）；startingState/startAccel 0.4/vEgoStarting 0.3/vEgoStopping 0.2/longitudinalActuatorDelay 0.5/stoppingDecelRate 0.03；get_pid_accel_limits=(-4,2) |
+| `carcontroller.py` | _update_longitudinal：frame%2==0 发三件套，resume=LoC starting |
+| `safety/modes/byd.h` | BYD_PARAM_LONGITUDINAL=2；TX_MSGS_LONG（0x316/32D/32E/32F/3B0）；0x32E echo-relay accel 检查；fwd 加挡 0x32D/E/F（双向）；**MADS 修复**（byd 全部 check_relay=false，stock_ecu_check 不触发 → rx_hook 末尾显式驱动 mads_state_update） |
+| `safety/tests/test_byd.py` | TestBydSafetyLong（118 passed 全绿，含 echo-relay 门控测试） |
+| `tests/common.py` | no_lockout += TestBydSafetyLong |
+
+注：本仓库不带 scons 构建文件（工作区曾有 4 个未跟踪 SConstruct/SConscript，分支切换会被清掉，也不入库）。编译 libsafety 用手动命令：`cd opendbc_repo && cc -shared -fPIC -DCANFD -I. -Iopendbc/safety/board opendbc/safety/tests/libsafety/safety.c -o opendbc/safety/tests/libsafety/libsafety.so`，测试 `PYTHONPATH=$PWD/opendbc_repo:$PWD .venv/bin/python -m pytest opendbc_repo/opendbc/safety/tests/test_byd.py -q`（PYTHONPATH 必须带，否则解析到错误包路径）。
+
+### 4.4 验证状态与风险
+
+- 回归：byd 安全测试 118 passed/0 failed（旧 24 个存量漂移一并修复）；横向 latch 回放 13/13；冒烟三帧逐字节一致
+- **待办**：固件重刷（TX 白名单+accel 检查+fwd 门控进 panda）；`docs/firmware-safety_byd.h` 快照待同步
+- 实车首验重点：①低速封闭场地起步/跟停（delay 0.5 需标定）②TOO_CLOSE→-4 m/s²（厂商行为，route37 零触发证据，慎验）③JerkLower 固化 -0.8 在急减速的手感 ④静止段 ResumeFromStandstill 首验（route37 无样本）
+- JerkLower/JerkUpper 固化与厂商"plan jerk 派生"的偏差：平顺驾驶完全一致（厂商 692/697 帧同值），急减速时厂商会放宽到 -4.0，我们待 plan jerk 接入后再对齐
 
 ## 五、待办（优先级序）
 
-1. **推送 + 设备同步**（`ea93962414` review 修复 + `ec28881e7b` 厂商对齐，均未推送）——路径见 ops 文档第二节
-2. **实车复测**（按 ops 第三节规程）：重点 ①弯道助力连续性（让位曲线后 ⑤ 项观感）②对抗让位平滑度 ③开 `NeuralNetworkLateralControl=True` 后手感 A/B
-3. Phase 2 纵向（启动条件：2 干净）——按第四节设计实施
-4. 手感调参弹药（控车稳定后）：THRESHOLD 80→60-70、NN 与 override.toml 因子对比、厂商 DELTA 16（需固件放宽 10→16）与 24s 脱手计时器
-5. 0x11F 扩展解析（LKSPrepare/扭矩传感器位）作 0x318 备份源——低优先
+1. **推送 + 设备同步**（`ea93962414` review 修复 + `ec28881e7b` 厂商对齐 + 本次纵向落码，均未推送）——路径见 ops 文档第二节
+2. **实车复测横向**（按 ops 第三节规程）：重点 ①弯道助力连续性（让位曲线后 ⑤ 项观感）②对抗让位平滑度 ③开 `NeuralNetworkLateralControl=True` 后手感 A/B
+3. **纵向实车首验**（Phase 2 已落码，见第四节）：先刷固件（TX 白名单+accel 检查+fwd 门控）→ 设备开 `AlphaLongitudinalEnabled` → 低速封闭场地起步/跟停 → 开放道路低速 → 高速；重点验证 4.4 节四项
+4. `docs/firmware-safety_byd.h` 快照同步（刷入后）
+5. 手感调参弹药（控车稳定后）：THRESHOLD 80→60-70、NN 与 override.toml 因子对比、厂商 DELTA 16（需固件放宽 10→16）与 24s 脱手计时器、JerkLower 接 plan jerk
+6. 0x11F 扩展解析（LKSPrepare/扭矩传感器位）作 0x318 备份源——低优先

@@ -20,6 +20,10 @@ class CarState(CarStateBase):
     # stock camera's ACC_MPC_STATE (bus 2); echoed back on bus 0 by the
     # controller so the spoofed LKAS request keeps the camera's SETME_* fields
     self.cam_lkas = {}
+    # ACC domain frames (bus 2) as the OP-longitudinal echo base
+    self.radar_acc_msg = {}
+    self.adas_msg = {}
+    self.aeb_msg = {}
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
@@ -38,6 +42,13 @@ class CarState(CarStateBase):
     # / MPC_State fields is required - building the frame from scratch faults
     # the DiPilot ADAS domain ('check multifunction video controller').
     self.cam_lkas = cp_adas.vl["ACC_MPC_STATE"]
+
+    # ACC domain frames (bus 2) cached as the echo base for OP longitudinal
+    # (transparent ACC_CMD/ACC_HUD/ACC_AEB replacement onto bus 0). Empty dicts
+    # before the first frame - the controller synthesizes an idle ACC_CMD then.
+    self.radar_acc_msg = dict(cp_adas.vl["ACC_CMD"])
+    self.adas_msg = dict(cp_adas.vl["ACC_HUD_ADAS"])
+    self.aeb_msg = dict(cp_adas.vl["ACC_AEB"])
 
     # speed
     # Song Plus DM-i: the 0x122 wheel-speed message reads all zeros and the
@@ -167,8 +178,9 @@ class CarState(CarStateBase):
       ("BSD_RADAR", 10),         # 0x418
     ]
     adas_messages = [
-      ("ACC_HUD_ADAS", 20),      # 0x32d
-      ("ACC_CMD", 20),           # 0x32e
+      ("ACC_HUD_ADAS", 50),      # 0x32d
+      ("ACC_CMD", 50),           # 0x32e
+      ("ACC_AEB", 50),           # 0x32f, stock radar AEB heartbeat (echoed on bus 0 by OP long)
       ("ACC_MPC_STATE", 50),     # 0x316, stock camera LKAS frame (echoed on bus 0)
     ]
     return {

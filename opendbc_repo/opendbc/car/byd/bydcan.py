@@ -1,3 +1,16 @@
+import numpy as np
+
+from opendbc.car.byd.values import CarControllerParams
+
+_ACCEL_MIN = CarControllerParams.ACCEL_MIN
+_ACCEL_MAX = CarControllerParams.ACCEL_MAX
+_COMFORT_BAND_UPPER = CarControllerParams.COMFORT_BAND_UPPER
+_COMFORT_BAND_LOWER = CarControllerParams.COMFORT_BAND_LOWER
+_JERK_UPPER = CarControllerParams.JERK_UPPER_LIMIT
+_JERK_LOWER = CarControllerParams.JERK_LOWER_LIMIT
+_MIN_START_ACCEL = CarControllerParams.MIN_START_ACCEL
+
+
 def byd_checksum(byte_key, dat):
   # not an actual known crc function, reverse engineered on Atto 3 (bukapilot);
   # TODO(Song Plus DM-i): verify against real vehicle CAN logs
@@ -153,29 +166,100 @@ def create_can_steer_command(packer, steer_angle, steer_req, is_standstill, raw_
   return packer.make_can_msg("STEERING_MODULE_ADAS", 0, values)
 
 
-def create_accel_command(packer, accel, enabled, raw_cnt):
-  """ACC_CMD (814) spoof for openpilot longitudinal control. Not in use, needs real vehicle validation."""
-  # AccelCmd 0|8 (0.05, -5)
-  accel_raw = int(round((min(max(accel, -5.0), 7.75) + 5.0) / 0.05))
+def create_accel_command(packer, accel, enabled, active, resume, radar_acc_msg, raw_cnt):
+  """50 Hz, transparent ACC_CMD (814) replacement for OP longitudinal control.
 
-  values = {
-    "AccelCmd": accel_raw,
-    "ComfortBandUpper": 100,
-    "ComfortBandLower": 100,
-    "JerkUpperLimit": 25,
-    "SETME1_0x1": 1,
-    "JerkLowerLimit": 80,
-    "ResumeFromStandstill": 0,
-    "StandstillState": 0,
-    "BrakeBehaviour": 0,
-    "AccReqNotStandstill": enabled,
-    "AccControlActive": enabled,
-    "AccOverrideOrStandstill": 0,
-    "EspBehaviour": 0,
-    "Counter": raw_cnt,
-  }
+  The stock radar keeps owning the ACC session (its frames on bus 2 stay
+  alive and feed cruiseState), OP re-broadcasts its frame onto bus 0 with the
+  acceleration fields overridden while engaged. Byte template from the vendor
+  build's real TX (route 00000037):
+
+  - inactive echo: AccelCmd=0.0, ComfortBand=0/0, JerkUpper=0, JerkLower=0,
+    AccControlActive=0, AccReqNotStandstill=1, EspBehaviour=1 (radar standby)
+  - active: AccelCmd=OP accel ([-4, 2] m/s2), ComfortBand 0.1/0.05 only while
+    accel >= 0, JerkUpper 1.0 / JerkLower -0.8 (fixed; vendor derives them
+    from the plan jerk which we do not have), AccControlActive=1
+  - ResumeFromStandstill pulses while long control is starting (never seen in
+    the vendor log - no standstill in route 37 - so it follows the vendor
+    decompile's starting-state handling)
+  - counter free-runs at 50 Hz independent of the radar (verified: the vendor
+    counter walks 0-f continuously across echo/active transitions)
+  """
+  if radar_acc_msg:
+    # echo the radar's frame as the base (StandstillState / BrakeBehaviour /
+    # EspBehaviour etc. are the radar's own values)
+    values = {s: radar_acc_msg[s] for s in (
+      "AccelCmd", "ComfortBandUpper", "ComfortBandLower", "SETME1_0x1",
+      "JerkUpperLimit", "ResumeFromStandstill", "JerkLowerLimit",
+      "StandstillState", "BrakeBehaviour", "AccReqNotStandstill",
+      "AccControlActive", "AccOverrideOrStandstill", "EspBehaviour")}
+  else:
+    # no radar frame seen yet (ACC never on): synthesized idle frame, the
+    # all-zero control-bits shape from route 37's byte5=0x00 population
+    values = {
+      "AccelCmd": 0.0, "ComfortBandUpper": 0.0, "ComfortBandLower": 0.0,
+      "JerkUpperLimit": 0.0, "JerkLowerLimit": 0.0, "SETME1_0x1": 1,
+      "ResumeFromStandstill": 0, "StandstillState": 0, "BrakeBehaviour": 0,
+      "AccReqNotStandstill": 0, "AccControlActive": 0,
+      "AccOverrideOrStandstill": 0, "EspBehaviour": 0,
+    }
+
+  if enabled and active:
+    standstill = bool(radar_acc_msg.get("StandstillState", 0)) if radar_acc_msg else False
+    accel = float(np.clip(accel, _ACCEL_MIN, _ACCEL_MAX))
+    if resume and standstill:
+      accel = max(accel, _MIN_START_ACCEL)
+    values.update({
+      "AccelCmd": accel,
+      "ComfortBandUpper": _COMFORT_BAND_UPPER if accel >= 0 else 0.0,
+      "ComfortBandLower": _COMFORT_BAND_LOWER if accel >= 0 else 0.0,
+      "JerkUpperLimit": _JERK_UPPER,
+      "JerkLowerLimit": _JERK_LOWER,
+      "AccControlActive": 1,
+      "AccReqNotStandstill": 0 if standstill else 1,
+      "AccOverrideOrStandstill": 1 if standstill else 0,
+      "StandstillState": 1 if standstill else 0,
+      "EspBehaviour": 1,
+      "ResumeFromStandstill": 1 if resume else 0,
+    })
+
+  values["Counter"] = raw_cnt
+  values["SETME2_0xF"] = 0xF
 
   dat = packer.make_can_msg("ACC_CMD", 0, values)[1]
-  crc = byd_checksum(0xAF, dat[:-1])
-  values["CheckSum"] = crc
+  values["CheckSum"] = byd_checksum(0xAF, dat[:-1])
   return packer.make_can_msg("ACC_CMD", 0, values)
+
+
+def create_acc_hud_command(packer, adas_msg, raw_cnt):
+  """50 Hz, ACC_HUD_ADAS (813) relay: pure echo of the stock camera's HUD frame.
+
+  The camera keeps streaming its HUD on bus 2 (it stays the session owner);
+  OP re-broadcasts it onto bus 0 with only the counter/checksum re-stamped.
+  Route 37 shows the vendor's HUD content matching the camera's state 1:1
+  (AccState/AccOn1/Notify all follow, SETME3_0xFFF=0xFFF, Status=4)."""
+  values = {s: adas_msg[s] for s in (
+    "SetSpeed", "HasLead", "SetDistance", "LeadingDistance", "AEB", "FCW",
+    "SETME1_0x1", "AccState", "AccOn1", "CloseWarning", "SETME2_0x1",
+    "Notify", "Status", "SETME3_0xFFF")}
+  values["Counter"] = raw_cnt
+  values["SETME4_0xF"] = 0xF
+
+  dat = packer.make_can_msg("ACC_HUD_ADAS", 0, values)[1]
+  values["CheckSum"] = byd_checksum(0xAF, dat[:-1])
+  return packer.make_can_msg("ACC_HUD_ADAS", 0, values)
+
+
+def create_acc_aeb_command(packer, aeb_msg, raw_cnt):
+  """50 Hz, ACC_AEB (815) heartbeat relay: static payload + our counter.
+
+  Byte template from route 37: payload `05 80 02 0f ff ff` constant, counter
+  in byte 6 low nibble, SETME4_0xF, byd_checksum. AEB itself stays with the
+  stock radar."""
+  values = {"PAYLOAD": aeb_msg["PAYLOAD"]}
+  values["Counter"] = raw_cnt
+  values["SETME4_0xF"] = 0xF
+
+  dat = packer.make_can_msg("ACC_AEB", 0, values)[1]
+  values["CheckSum"] = byd_checksum(0xAF, dat[:-1])
+  return packer.make_can_msg("ACC_AEB", 0, values)

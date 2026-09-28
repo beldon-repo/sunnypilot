@@ -3,11 +3,13 @@ import math
 import numpy as np
 
 from opendbc.can import CANPacker
-from opendbc.car import Bus, DT_CTRL
+from opendbc.car import Bus, DT_CTRL, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.byd import bydcan
 from opendbc.car.byd.values import USE_ANGLE_STEERING, CarControllerParams
+
+LongCtrlState = structs.CarControl.Actuators.LongControlState
 
 RES_INTERVAL = 125   # frames between resume presses (100 Hz loop)
 SNG_WAIT = 310       # frames to wait before first resume press
@@ -274,6 +276,27 @@ class CarController(CarControllerBase):
         can_sends.append(bydcan.send_buttons(self.packer, (CS.counter_pcm_buttons + 1) % 16))
         self.resume_counter += 1
 
+  def _update_longitudinal(self, CC, CS, can_sends):
+    """OP longitudinal: transparent replacement of the radar's ACC frames on bus 0.
+
+    Mirrors the vendor build's TX (route 00000037): all three messages at 50 Hz
+    unconditionally - ACC_CMD is the radar frame with the acceleration fields
+    overridden while engaged, ACC_HUD/ACC_AEB are pure echoes. The stock radar
+    keeps owning the session on bus 2, so cruiseState and cancel semantics are
+    untouched; the firmware blocks the stock frames bus2->bus0 while the
+    LONGITUDINAL safety flag is set."""
+    if self.frame % 2 == 0:
+      raw_cnt = (self.frame // 2) % 16
+      # resume pulse while long control is starting (standstill -> go)
+      resume = CC.actuators.longControlState == LongCtrlState.starting
+      can_sends.append(bydcan.create_accel_command(
+        self.packer, CC.actuators.accel, CC.enabled, CC.longActive, resume,
+        CS.radar_acc_msg, raw_cnt))
+      if CS.adas_msg:
+        can_sends.append(bydcan.create_acc_hud_command(self.packer, CS.adas_msg, raw_cnt))
+      if CS.aeb_msg:
+        can_sends.append(bydcan.create_acc_aeb_command(self.packer, CS.aeb_msg, raw_cnt))
+
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
 
@@ -304,6 +327,9 @@ class CarController(CarControllerBase):
 
     if steer_send is not None:
       can_sends.append(steer_send)
+
+    if self.CP.openpilotLongitudinalControl:
+      self._update_longitudinal(CC, CS, can_sends)
 
     self._update_sng_auto_resume(CC, CS, can_sends)
 
