@@ -28,6 +28,8 @@ class CarController(CarControllerBase):
     self.brake_release_counter = 0
     self.angle_gate = False
     self.angle_settle_counter = 0
+    self.silence_counter = 0
+    self.silence_exit = False
     self.driver_yield_counter = 50
     self.last_large_angle_frame = -10 ** 9  # far past: no boot-time lockout
 
@@ -97,9 +99,13 @@ class CarController(CarControllerBase):
     # ramps 52->0 over ~80 ms and then drops Active - a request step straight
     # from 50 to 0 is something the stock camera never sends)
     if lat_active and not self.lkas_active and not CS.torque_failed:
-      if CS.lkas_prepared:
-        self.lkas_active = True
-        self.steer_softstart_limit = 0
+      # after a silence-exit, re-enter only on REAL demand (>=6 units):
+      # re-arming on zero demand just restarts the silent-armed cycle
+      if abs(CC.actuators.torque) > 0.03 or not self.silence_exit:
+        if CS.lkas_prepared:
+          self.lkas_active = True
+          self.steer_softstart_limit = 0
+          self.silence_exit = False
     elif not lat_active and self.apply_torque_last == 0:
       self.lkas_active = False
 
@@ -131,8 +137,26 @@ class CarController(CarControllerBase):
 
         self.apply_torque_last = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last,
                                                                   CS.out.steeringTorque, CarControllerParams)
+
+        # An armed Config=3 session that goes SILENT (zero request) for more
+        # than ~2 s latches the EPS: all four mid-drive faults of the first
+        # hour fired with |request|=0 for seconds (after the driver yield or
+        # on a dead-straight road), while the working vendor build never lets
+        # its request sit at zero. Exit the session on sustained silence -
+        # the idle echo frames below are the camera's own standby state, and
+        # the next real demand re-enters through the 3-frame prepare burst.
+        if abs(self.apply_torque_last) < 2:
+          self.silence_counter += 1
+          if self.silence_counter >= 100:  # 2 s at the 100 Hz loop
+            self.lkas_active = False
+            self.apply_torque_last = 0
+            self.silence_counter = 0
+            self.silence_exit = True
+        else:
+          self.silence_counter = 0
     else:
       self.apply_torque_last = 0
+      self.silence_counter = 0
       if lat_active and not CS.lkas_prepared and not CS.torque_failed:
         # ask the EPS to arm LKA; it responds with LKAS_Prepared in ACC_EPS_STATE
         lkas_req_prepare = 1
@@ -141,12 +165,13 @@ class CarController(CarControllerBase):
     # fields match what the DiPilot ADAS domain expects (from-scratch frames
     # fault the camera). Skip until we have seen the camera's 0x316.
     if self.frame % 2 == 0 and CS.cam_lkas:
-      # LKAS_Config=3 (ALARM_AND_LKA) unconditionally - it is the EPS's
-      # actuation-permission session mode. The stock camera never sends it
-      # (its idle is 1/ALARM or 2), which is why echoed-Config frames arm,
-      # echo back, stay fault-free - and never actuate. Matches the working
-      # vendor build byte-for-byte (route 00000037).
-      lkas_config = 3
+      # LKAS_Config=3 (ALARM_AND_LKA) is the EPS's actuation-permission
+      # session mode - but ONLY while the session is actually steering or
+      # requesting prepare. An armed session (Config=3, Active=0) that sits
+      # at zero torque latches the EPS (route 00000004 seg16 et al.), so
+      # disengaged/idle frames echo the camera's own standby Config (1/2)
+      # - exactly what the stock camera streams when it is not steering.
+      lkas_config = 3 if (self.lkas_active or lkas_req_prepare) else None
       return bydcan.create_lkas_request(
         self.packer, CS.cam_lkas, self.apply_torque_last, self.lkas_active,
         lkas_req_prepare, lkas_config, (self.frame // 2) % 16)
