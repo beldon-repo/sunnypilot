@@ -54,8 +54,8 @@ class TestBydSafetyTorque(BydButtonTestBase, common.PandaCarSafetyTest, common.D
   GAS_PRESSED_THRESHOLD = 1  # factor 0.01 percent
 
   # torque control limits (matches BYD_TORQUE_STEERING_LIMITS in byd.h)
-  MAX_RATE_UP = 10
-  MAX_RATE_DOWN = 12
+  MAX_RATE_UP = 17
+  MAX_RATE_DOWN = 17
   MAX_RT_DELTA = 250
   MAX_TORQUE_LOOKUP = ([0.], [300])
   DYNAMIC_MAX_TORQUE = False
@@ -172,8 +172,8 @@ class TestBydSafetyLong(BydButtonTestBase, common.PandaCarSafetyTest, common.Dri
 
   GAS_PRESSED_THRESHOLD = 1
 
-  MAX_RATE_UP = 10
-  MAX_RATE_DOWN = 12
+  MAX_RATE_UP = 17
+  MAX_RATE_DOWN = 17
   MAX_RT_DELTA = 250
   MAX_TORQUE_LOOKUP = ([0.], [300])
   DYNAMIC_MAX_TORQUE = False

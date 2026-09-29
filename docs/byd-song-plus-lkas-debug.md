@@ -539,3 +539,7 @@ op_byd 工作日志（route 37）的 carParams 与实时流量给出了完整标
 - **删除**：让位曲线、对向探测/follow 翻转、静默守卫旧逻辑、软启动、角度门/速率门/10s 锁定、武装门（根因 15 门）——全是制造锁存态的防御栈
 
 **验证**：replay_latches 重写为厂商语义 11/11（engage burst/静默退场重连/重对抗满权限/冷武装进对抗/R16 对向/刹车/err/TF/大角度/退场重连/噪声）；两条真实锁存 route（909633d7ed、c9f1698c82）全量回放 CLEAN（armed-静默 ≤0.02s、换向 4-5 次）；safety 118 绿（test_byd ALLOWANCE 同步 120）；car 接口测试绿。**注意**：回放用的是旧系统录的 demand（截幅导致振荡），闭环行为以实车为准。
+
+### 6.29 参数全量对齐（2026-09-29，用户点名 values.json）：厂商运行时真值直采
+
+用户指出 docs_site/op_byd_data/values.json（厂商 values 模块运行时 namespace dump）早已提供而未被用作参数基准——此前参数靠"日志反推+记忆"，三处偏差：DELTA 8/10（厂商 **16/16**，固件限 17）、ERROR_MAX 50（厂商 **46**）、缺全套 LOW 变体与速度限制参数。已全量直采对齐（含 ANGLE_RATE_LIMIT 表、ANGLE_LIMIT_*、STEER_DEACTIVE_INTERVAL_MS=24000、STEERING_TORQUE_LIMIT_SPEED=20、INNER_EPS_SCALE_POINT=30、NON_LINEAR_TORQUE_PARAMS 宋22 行 [14.9998, -0.5597, 0.0963, 12.475, 3.0, 1.5, 0.0685]）；CanBus dump 同时确认 LOOPBACK=128/REJECTED=192——fault #9 的 src192 帧是相机激活帧被 fwd 拒收的副本（EPS 未见），坐实冷武装结论。固件同步 max_rate 17/17（rt 250 本就不绑定 16/帧合法爬升，勿再误调）。get_byd_torque_limits 按**平台 flags** 选 LOW 变体（PyArmor 名字表丢失，函数体未还原，Song 22 未见 LOW_TORQUE 证据）；STEER_DEACTIVE_INTERVAL_MS/速度限制曲线的行为实现待后续从 interface disasm 还原。

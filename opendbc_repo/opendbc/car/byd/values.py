@@ -22,35 +22,38 @@ USE_ANGLE_STEERING = False
 
 
 class CarControllerParams:
-  # --- torque path (default), matches BYD_TORQUE_STEERING_LIMITS in byd.h ---
-  # Calibration anchored to the working vendor build's live traffic (route
-  # 00000037): it steers this car with |torque| p50=67 / p90=128 / max=193
-  # within the LKAS_Config=3 session, and its per-frame steps cap at ~16
-  # (@50 Hz, its own firmware limit 17). Earlier "50-62 ceiling" readings
-  # were plausibility rules on mis-marked (Config=2/State=2) frames, not the
-  # real envelope. Our firmware safety limits (300/10/12) stay untouched as
-  # upper bounds; deltas 8/10 fit under them.
+  # --- torque path (default) ---
+  # EVERY scalar below is taken verbatim from the vendor build's runtime
+  # values dump (docs_site/op_byd_data/values.json, the decrypted op_byd
+  # opendbc.car.byd.values namespace) - no more hand-reconstruction. The
+  # vendor's own real traffic matches them: |torque| p50=67/p90=128/max=193,
+  # per-frame steps p99~16 within the Config=3 session (route 00000037).
   STEER_MAX = 300
-  STEER_STEP = 2            # 50 Hz command rate (100 Hz control loop)
-  STEER_DELTA_UP = 8        # per 50 Hz command; firmware safety allows 10
-  STEER_DELTA_DOWN = 10     # per 50 Hz command; firmware safety allows 12
+  STEER_MAX_LOW = 150            # BYD_LOW_TORQUE flag variant (get_byd_torque_limits picks by platform flags)
+  STEER_STEP = 2                 # 50 Hz command rate (100 Hz control loop)
+  STEER_DELTA_UP = 16            # vendor 16/frame (its firmware caps at 17)
+  STEER_DELTA_DOWN = 16
+  STEER_DELTA_UP_LOW = 10        # LOW_TORQUE variant
+  STEER_DELTA_DOWN_LOW = 10
   STEER_DRIVER_ALLOWANCE = 120
   STEER_DRIVER_MULTIPLIER = 3
   STEER_DRIVER_FACTOR = 1
-  STEER_ERROR_MAX = 50
-  # STEER_MAX/ALLOWANCE are the vendor's own firmware numbers (STEER_MAX=300,
-  # ALLOWANCE=120, decrypted op_byd): the vendor reaches -153 against a
-  # +166 driver yank and 193 absolute in clean steering, which the standard
-  # driver-limit formula only permits with (300, 120) - under (200, 68) any
-  # opposing request clips to ZERO once |drv| > 134.7, which is exactly the
-  # armed-silence the EPS latches on. Our firmware byd.h caps at 300/10/12
-  # already; its driver_torque_allowance must match this 120.
-  # Armed-silence backstop: our instrumented sessions latched TorqueFailed
-  # after 0.48-0.72 s of armed |request| ~ 0 (drive 2, 6/6). The vendor never
-  # sits there - not because it gates anything, but because its demand loop
-  # is always steering. Exit to the retry burst just before the measured
-  # latch band; the ReqPrepare burst itself is a stream the EPS sees between
-  # every vendor session and never objects to.
+  STEER_ERROR_MAX = 46           # vs EPS MainTorque echo; python-side reference only
+  STEER_ERROR_MAX_UP = 46
+  STEER_ERROR_MAX_DOWN = 46
+  STEER_ERROR_MAX_HIGH = 150
+  STEER_ERROR_MAX_UP_HIGH = 46
+  STEER_ERROR_MAX_DOWN_HIGH = 46
+  # 24 s of continuous steering triggers the vendor's derate + SDA hands-off
+  # nudge (STEER_DEACTIVE_INTERVAL_MS / last_activate_nanos in its controller)
+  STEER_DEACTIVE_INTERVAL_MS = 24000
+  STEERING_RATE_DEG_LIMIT = 25       # deg/s hard cap (angle path)
+  STEERING_ANGLE_DEG_LIMIT = 90      # deg hard cap (angle path)
+  STEERING_TORQUE_LIMIT_SPEED = 20   # speed knee in the vendor's torque limit curve
+  STEERING_INNER_EPS_SCALE_POINT = 30  # inner EPS scale point in the same curve
+  # Armed-silence backstop (ours, not the vendor's - the vendor never sits
+  # armed at zero because its demand loop is always steering): our measured
+  # 0.48-0.72 s armed-zero latch band, exit to the retry burst before it.
   STEER_ZERO_EXIT_FRAMES = 21  # 50 Hz commands: ~0.42 s armed at |request| < 2 -> exit + re-burst
   # Large-angle holdback - the one envelope the vendor log does not cover
   # (its max observed angle is 37 deg). Our old >50 deg latches all happened
@@ -65,8 +68,33 @@ class CarControllerParams:
   # from-scratch frames that missed the SETME_* fields.
   STEER_SESSION_CONFIG = 3
   # driver torque for steeringPressed (raw EPS scale: hands-off noise <50,
-  # light grip 60-150)
+  # light grip 60-150; the vendor has no equivalent - openpilot-ism)
   STEER_THRESHOLD = 80  # TODO(Song Plus DM-i): calibrate
+
+  # --- angle path (experimental 482), vendor tables verbatim ---
+  ANGLE_RATE_LIMIT_UP = ([5., 10., 15.], [0.5, 2.0, 3.0])
+  ANGLE_RATE_LIMIT_DOWN = ([5., 10., 15.], [0.5, 2.0, 3.0])
+  ANGLE_RATE_LIMIT_UP_LOW = ([5., 10., 15.], [0.25, 1.0, 1.5])
+  ANGLE_RATE_LIMIT_DOWN_LOW = ([5., 10., 15.], [0.25, 1.0, 1.5])
+  ANGLE_LIMIT_UP = 220           # raw actuator units of the vendor's angle path
+  ANGLE_LIMIT_DOWN = 220
+  ANGLE_LIMIT_UP_LOW = 50
+  ANGLE_LIMIT_DOWN_LOW = 50
+  ANGLE_ERROR_ALLOWED = 5
+  ANGLE_ERROR_ALLOWED_LOW = 2.5
+  ANGLE_ERROR_MAX = 5
+  # openpilot angle-path struct, built from the vendor tables above
+  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
+    STEERING_ANGLE_DEG_LIMIT,
+    ANGLE_RATE_LIMIT_UP,
+    ANGLE_RATE_LIMIT_DOWN,
+  )
+
+  # per-platform nonlinear torque limit fits (the vendor's
+  # NON_LINEAR_TORQUE_PARAMS); ours is the Song Plus DM-i 22 row
+  NON_LINEAR_TORQUE_PARAMS = {
+    'BYD_SONG_PLUS_DMI_22': [14.99976405, -0.55974149, 0.09633187, 12.47500536, 2.99999827, 1.49999146, 0.06850084],
+  }
 
   # --- longitudinal (OP ACC_CMD), from the decrypted op_byd build and its
   # real-vehicle TX frames (route 00000037, docs_site/op_byd_logs) ---
