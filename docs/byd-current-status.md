@@ -103,6 +103,8 @@ err=2 不升级。
 | 厂商装机树+固件 ELF | `docs_site/op_byd` | panda.elf 带符号：BYD_STEERING_LIMITS=[300,18,18,…,46]，LOW=[300,9,9,46]，HIGH error=200，ALT=[150,50,50]；`byd_adjust_steer_torque`/`byd_steer_torque_cmd_checks` 可反汇编 |
 | 厂商实车日志 | `docs_site/op_byd_logs/`（route 35/36/37） | 会话生命周期/标定全部出自 7--12e_0 |
 | 厂商解密源码 | `/Users/wujiafu/Documents/op/cp_byd/docs/pyarmor_decrypted/` | disasm+values 100% 覆盖 |
+| **三方对照+手册经验库** | `docs/byd-control-lessons.md` | 厂商/yysnet/官方手册可吸收项与决策树（新 session 先读） |
+| 官方维修手册文本 | `docs_site/pdf/2021年款比亚迪宋PLUS DMi-01-维修手册-*.txt` | ACC+MPC 分册（EPS 分册缺，SteerErrorCode 码表仍在找） |
 | 回放套件 | `docs_site/hour_logs_2/replay_latches.py` | 11 场景（厂商语义），本地跑：`PYTHONPATH=$PWD/opendbc_repo:$PWD .venv/bin/python …` |
 | route 回放 | `docs_site/hour_logs_2/replay_routes_new.py` | 真实 route 灌新控制器（本地，rlog 样本在 /tmp/byd_routes/ 会丢可重拉） |
 | route 总览审计 | `docs_site/hour_logs_2/route_audit.py` | FAULT/armed 时段/告警一览（需 scp 到设备 /tmp 跑，/tmp 重启即清） |
