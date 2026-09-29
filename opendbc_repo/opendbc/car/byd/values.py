@@ -55,12 +55,6 @@ class CarControllerParams:
   # armed at zero because its demand loop is always steering): our measured
   # 0.48-0.72 s armed-zero latch band, exit to the retry burst before it.
   STEER_ZERO_EXIT_FRAMES = 21  # 50 Hz commands: ~0.42 s armed at |request| < 2 -> exit + re-burst
-  # Large-angle holdback - the one envelope the vendor log does not cover
-  # (its max observed angle is 37 deg). Our old >50 deg latches all happened
-  # through hesitation mechanics that no longer exist, but with no vendor
-  # evidence past 37 deg, stand down there and re-burst below 40.
-  STEER_LARGE_ANGLE = 50.        # deg, stand down above this
-  STEER_LARGE_ANGLE_REARM = 40.  # deg, re-burst below this
   # The vendor streams Config=3 in EVERY session state - idle included
   # (route 00000037: 16 s of Cfg=3/Act=0/lanes 0/0 standby at boot, and
   # between every session). Lanes 0/0 make it standby, not an armed-silent
@@ -107,15 +101,6 @@ class CarControllerParams:
                              # jerk available to us, so the calm-floor value
   MIN_START_ACCEL = 0.2      # vendor: can_accel = max(0.2, can_accel) on resume
   STOP_ACCEL = -4.0          # vendor: adas TOO_CLOSE -> ACCEL_MIN
-
-  # --- angle path (experimental) ---
-  # DiPilot faults when the steering request exceeds ~90 degrees,
-  # and the angle command is sent at 0.1 deg/bit
-  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    90.,  # deg, DiPilot faults above this  # TODO(Song Plus DM-i): calibrate from real vehicle data
-    ([0., 5., 15.], [3., 1.2, 0.35]),
-    ([0., 5., 15.], [3., 2.5, 0.6]),
-  )
 
   def __init__(self, CP):
     pass

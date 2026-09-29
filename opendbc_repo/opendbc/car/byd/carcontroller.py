@@ -33,7 +33,6 @@ class CarController(CarControllerBase):
     self.brake_release_counter = 0
     self.retry_burst = 0      # remaining ReqPrepare frames of the engage/retry burst
     self.silence_counter = 0  # armed |request|~0 backstop
-    self.angle_hold = False   # large-angle holdback (see values.py)
 
     # SNG auto-resume state
     self.is_sng_check = False
@@ -95,16 +94,6 @@ class CarController(CarControllerBase):
     # steers parking maneuvers at 37+ deg and 1-17 km/h.
     allow = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill \
       and not CS.torque_failed and not CS.steer_error
-
-    # large-angle holdback (values.py): the one envelope the vendor log does
-    # not cover. Stand down past 50 deg, re-burst below 40 - no settle dance,
-    # the ramp-out plus burst already matches the vendor's exit-retry shape.
-    ang = abs(CS.out.steeringAngleDeg)
-    if ang > CarControllerParams.STEER_LARGE_ANGLE:
-      self.angle_hold = True
-    elif self.angle_hold and ang < CarControllerParams.STEER_LARGE_ANGLE_REARM:
-      self.angle_hold = False
-    allow = allow and not self.angle_hold
 
     if self.lkas_active:
       if CS.torque_failed:

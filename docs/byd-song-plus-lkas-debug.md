@@ -543,3 +543,24 @@ op_byd 工作日志（route 37）的 carParams 与实时流量给出了完整标
 ### 6.29 参数全量对齐（2026-09-29，用户点名 values.json）：厂商运行时真值直采
 
 用户指出 docs_site/op_byd_data/values.json（厂商 values 模块运行时 namespace dump）早已提供而未被用作参数基准——此前参数靠"日志反推+记忆"，三处偏差：DELTA 8/10（厂商 **16/16**，固件限 17）、ERROR_MAX 50（厂商 **46**）、缺全套 LOW 变体与速度限制参数。已全量直采对齐（含 ANGLE_RATE_LIMIT 表、ANGLE_LIMIT_*、STEER_DEACTIVE_INTERVAL_MS=24000、STEERING_TORQUE_LIMIT_SPEED=20、INNER_EPS_SCALE_POINT=30、NON_LINEAR_TORQUE_PARAMS 宋22 行 [14.9998, -0.5597, 0.0963, 12.475, 3.0, 1.5, 0.0685]）；CanBus dump 同时确认 LOOPBACK=128/REJECTED=192——fault #9 的 src192 帧是相机激活帧被 fwd 拒收的副本（EPS 未见），坐实冷武装结论。固件同步 max_rate 17/17（rt 250 本就不绑定 16/帧合法爬升，勿再误调）。get_byd_torque_limits 按**平台 flags** 选 LOW 变体（PyArmor 名字表丢失，函数体未还原，Song 22 未见 LOW_TORQUE 证据）；STEER_DEACTIVE_INTERVAL_MS/速度限制曲线的行为实现待后续从 interface disasm 还原。
+
+### 6.30 Controls Mismatch 死锁（route 19610c61f2）：部署固件的心跳永远不再放行 + 角度 holdback 静默不控车
+
+**用户反馈**：横向已接近厂商手感，但 ①行驶中不控车 ②报 "TAKE CONTROL IMMEDIATELY / Controls Mismatch"。
+
+**帧级重建**：
+- 187.8-469.8：正常控车（首次武装时驾驶员 +152 握盘，会话照活——厂商架构实证）
+- 469.7：刹车取消（active=0）→ panda 3-strike 心跳不一致在 ~472.67 把 controls_allowed 拉到 0
+- 472.58：驾驶员重新 SET ACC（AccState 1→2、AccControlActive 0→1）→ OP active=1，但**部署固件里 controls_allowed=true 的唯一来源是 resume 按钮伪造**（fw_base 的 0xf3 心跳只设标志、main.c 只做 3-strike 下降）——行驶中重新接合没有按钮时刻 → **controls_allowed 卡 0 共 106 秒**
+- 期间 480-579 车辆 6km/h 爬行过大弯（方向盘 >50°），角度 holdback 也让会话不武装（第二重静默）
+- 518.98-578.98：OP active 持续 60 秒（6000 帧）与 panda controlsAllowed=false 不一致 → 上游 selfdrived controlsMismatch → immediateDisable ✓ 时序精确吻合
+
+**根因**：部署固件（0.9.x fw_base 构建）从未实现"心跳 engaged → controls_allowed 放行"路径——这是 pending 的"Phase 2 固件同步"的一部分；MADS 接线只存在于 repo 新版式 byd.h。次要因素：角度 holdback 制造 100 秒 latActive-without-steering。
+
+**修复**：
+1. fw_base main_comms.h 0xf3：`controls_allowed = heartbeat_engaged`（立即放行；下降仍走 3-strike 迟滞）——OP active 即可 TX，mismatch 不再有 60 秒窗口
+2. repo byd.h（未来 MADS 固件用）：mads_state_update 的 acc_main 改喂 **AccState 2/3/5 engaged 状态**（原 AccOn1 在宋上全程 1、无边沿，MADS 退出后将死锁；test_byd 的 _pcm_status_msg 同步 1→3）
+3. 删除控制器角度 holdback（厂商无角度门；holdback 是 100 秒静默的直接来源），values 同步清理，replay 场景 9 改为 big-angle-steer（55°/200° 保持武装出力）
+4. values.py 删除重复的旧 ANGLE_LIMITS 定义（新厂商表定义在后会覆盖它）
+
+**验证**：safety 118 绿、car 接口绿、replay 11/11（含 big-angle-steer）；固件 fec63fda 重刷。

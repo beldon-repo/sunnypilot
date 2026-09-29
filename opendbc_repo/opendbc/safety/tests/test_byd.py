@@ -81,7 +81,10 @@ class TestBydSafetyTorque(BydButtonTestBase, common.PandaCarSafetyTest, common.D
     return self.packer.make_can_msg_panda("ACC_EPS_STATE", 0, values)
 
   def _pcm_status_msg(self, enable):
-    values = {"AccState": 1 if enable else 0}  # Song: 1 = ACC_ACTIVE, 0/7 = off/standby
+    # Song engagement encoding (route-verified): AccState 2/3/5 are the
+    # engaged-only states; 1 is an ambiguous standby that must read as NOT
+    # engaged (it also appears at ignition and after a brake cancel)
+    values = {"AccState": 3 if enable else 1}
     return self.packer.make_can_msg_panda("ACC_HUD_ADAS", 2, values)  # camera side is bus 2
 
   def _speed_msg(self, speed):
@@ -139,7 +142,10 @@ class TestBydSafetyAngle(BydButtonTestBase, common.PandaCarSafetyTest, common.An
     return self.packer.make_can_msg_panda("EPS", 0, values)
 
   def _pcm_status_msg(self, enable):
-    values = {"AccState": 1 if enable else 0}  # Song: 1 = ACC_ACTIVE, 0/7 = off/standby
+    # Song engagement encoding (route-verified): AccState 2/3/5 are the
+    # engaged-only states; 1 is an ambiguous standby that must read as NOT
+    # engaged (it also appears at ignition and after a brake cancel)
+    values = {"AccState": 3 if enable else 1}
     return self.packer.make_can_msg_panda("ACC_HUD_ADAS", 2, values)  # camera side is bus 2
 
   def _speed_msg(self, speed):
@@ -207,7 +213,10 @@ class TestBydSafetyLong(BydButtonTestBase, common.PandaCarSafetyTest, common.Dri
     return self.packer.make_can_msg_panda("ACC_CMD", 0, values)
 
   def _pcm_status_msg(self, enable):
-    values = {"AccState": 1 if enable else 0}  # Song: 1 = ACC_ACTIVE, 0/7 = off/standby
+    # Song engagement encoding (route-verified): AccState 2/3/5 are the
+    # engaged-only states; 1 is an ambiguous standby that must read as NOT
+    # engaged (it also appears at ignition and after a brake cancel)
+    values = {"AccState": 3 if enable else 1}
     return self.packer.make_can_msg_panda("ACC_HUD_ADAS", 2, values)  # camera side is bus 2
 
   def _speed_msg(self, speed):

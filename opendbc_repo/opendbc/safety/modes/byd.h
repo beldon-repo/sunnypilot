@@ -94,12 +94,16 @@ static void byd_rx_hook(const CANPacket_t *msg) {
     // every non-standby state as engaged (pcm_cruise_check only enforces
     // cancellation when the stock ACC turns off).
     uint8_t acc_state = ((msg->data[2] >> 3) & 0x7U);
-    bool cruise_engaged = (acc_state != 0U) && (acc_state != 7U);
-    pcm_cruise_check(cruise_engaged);
-
-    // AccOn1 22|1 is the ACC main-on flag (route 37: 1 whenever the ACC is
-    // armed or controlling, 0 only with AccState=0).
-    acc_main_on = GET_BIT(msg, 22U);
+    // Song Plus DM-i engagement encoding (route-verified): AccState 2/3/5 are
+    // the engaged-only states; AccState=1 is an ambiguous standby that also
+    // shows up at ignition and after a brake cancel, and AccOn1 (22|1) stays 1
+    // through both - so neither may stand in for "engaged". MADS needs the
+    // engaged RISING edge to re-request controls after any exit: feeding it
+    // AccOn1 deadlocked the panda (controls_allowed stuck 0 while OP was
+    // active for 106 s -> upstream 60 s mismatch counter fired "Controls
+    // Mismatch", route 19610c61f2 t=579).
+    acc_main_on = (acc_state == 2U) || (acc_state == 3U) || (acc_state == 5U);
+    pcm_cruise_check(acc_main_on);
   }
 
   byd_mads_update();
