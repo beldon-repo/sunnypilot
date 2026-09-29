@@ -7,10 +7,13 @@
 
 ## 一、在系统中的位置
 
-- DiPilot MPC（前相机）是原车 LKA/ACC 的大脑；**EPS 是唯一横向执行器**。
+- DiPilot MPC（前相机，官方名"多功能视频控制器"）是原车 LKA/ACC 的大脑；**EPS 是唯一横向执行器**。
 - EPS 的 LKAS 命令唯一来源 = bus0 的 **0x316（ACC_MPC_STATE）**。相机原发的 0x316 在 bus2，panda byd 固件 `fwd_hook` 阻断 bus2→bus0 的 0x316/0x1E2 → **OP 是 EPS 唯一的 0x316 提供者**（调试记录根因 1 实证：OP 不发时 EPS 端 SteerWarning=100%、"请检查多功能视频控制器"）。
 - 启动阶段 pandad 尚未切入 byd safety 模式的 ~8s 内，相机 0x316 会短暂透传到 bus0（R10_000 实测：384 帧 @48Hz，之后归零）——不是持续桥接。
-- 总线拓扑（实车 CAN 统计）：bus0 = 底盘/动力/车身 + EPS 反馈；bus2 = 相机域仅 5 条（0x316/0x32D/0x32E/0x32F/0x432）；两总线地址交集为 0 → **必须全量转发 bus0↔bus2**（白名单饿死雷达，全 block 相机+雷达双饿死，根因 1 前置实验）。
+- 总线拓扑（实车 CAN 统计 + **2021 款维修手册官方端子表 P13**）：bus0 = **公有 CAN（底盘网）**：底盘/动力/车身 + EPS 反馈；bus2 = **私有 CAN（接雷达）**：仅 5 条（0x316/0x32D/0x32E/0x32F/0x432）；两总线地址交集为 0 → **必须全量转发 bus0↔bus2**（白名单饿死雷达，全 block 相机+雷达双饿死，根因 1 前置实验）。
+- **发送方修正（手册 DTC `U023587`）**：0x32D/0x32E/0x32F 的发送方是**雷达 MRR**，不是相机——bus2 透传 = 透传雷达帧（ACC_CMD counter 自由递增由此解释）。
+- **MRR 逐帧校验 MPC 的 0x316**（手册 DTC `C2F0882/83/86/87`：私有 CAN MPC 滚动计数器/校验值/信号无效/失去通讯）——根因 2"echo 字段不可缺省"的官方机理：我们替换 MPC 发 0x316 时雷达一直在当监工。
+- 巡航进入官方硬条件（ACC 手册症状表）：主驾**安全带、车门、前舱盖开关** + OK 档电——根因 7 的官方出处。官方只承诺 LDW ≥60km/h，LKA 速度范围未公开（我们 2-23km/h 能控是 op_byd 实证能力）。
 
 ## 二、报文清单（频率为实车实测）
 
@@ -20,7 +23,7 @@
 | ACC_EPS_STATE | 0x318 | 50 Hz | bus0 | EPS→OP | 反馈：Prepared / **CruiseActivated（执行电源线）** / TorqueFailed / SteerWarning+err / 扭矩 |
 | EPS | 0x11F | 100 Hz | bus0 | EPS→ | SteeringAngle / SteeringAngleRate（4°/s/bit，0-1020） |
 | PCM_BUTTONS | 0x3B0 | 10 Hz | bus0 | 车身→ | ACC 按键（OP 伪造 resume；fwd 不阻断） |
-| ACC_HUD_ADAS / ACC_CMD | 0x32D / 0x32E | 20 Hz | bus2 | 相机→ | ACC 状态 / 激活；真实转发（厂商曾整套伪造，我们不需要） |
+| ACC_HUD_ADAS / ACC_CMD | 0x32D / 0x32E | 20 Hz | bus2 | **雷达 MRR→**（手册 U023587 确认） | ACC 状态 / 激活；真实转发（厂商曾整套伪造，我们不需要） |
 | STEERING_MODULE_ADAS | 0x1E2 | — | bus0 | — | 角度命令（实验路径，宋 Plus 不发送，未启用） |
 
 DBC：`opendbc_repo/opendbc/dbc/byd_general_pt.dbc`；固件侧安全模型：`opendbc/safety/modes/byd.h`。
@@ -180,6 +183,7 @@ DBC：`opendbc_repo/opendbc/dbc/byd_general_pt.dbc`；固件侧安全模型：`o
 | 0000000a 帧级分析脚本 | `/tmp/byd_0a/analyze*.py`（临时，重拉：rlog 在设备 realdata） |
 | 厂商 c 位-出力相关性验证 | `/tmp/byd_0a/vendor_check.py` + `docs_site/op_byd_logs/`（route 7--12e：c=0 零出力） |
 | 厂商系统工作日志（字节模板来源） | `docs_site/op_byd_logs/`（含 vendor_diff.py） |
+| **官方维修手册**（总线架构/巡航进入条件/MRR-MPC 校验 DTC） | `docs_site/pdf/2021年款比亚迪宋PLUS DMi-01-维修手册-*.txt`（ACC + MPC 分册；SteerErrorCode 码表需 EPS 分册，暂缺） |
 | 调试全史（根因 1-14） | `byd-song-plus-lkas-debug.md`（15/16 见 `byd-current-status.md`） |
 | 当前状态快照 | `byd-current-status.md` |
 | 部署/测试规程 | `byd-song-plus-ops.md`（测试规程 = 调试记录 6.22） |
