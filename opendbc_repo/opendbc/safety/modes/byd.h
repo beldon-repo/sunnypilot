@@ -166,8 +166,8 @@ static bool byd_tx_hook(const CANPacket_t *msg) {
   } else {
     const TorqueSteeringLimits BYD_TORQUE_STEERING_LIMITS = {
       .max_torque = 300,              // matches python STEER_MAX
-      .max_rate_up = 17,              // per frame at 50 Hz: vendor firmware limit 17 (python STEER_DELTA_UP=16)
-      .max_rate_down = 17,            // vendor 16/frame both directions
+      .max_rate_up = 18,              // per frame at 50 Hz: vendor firmware struct dump (ELF) = 18 (python STEER_DELTA_UP=16)
+      .max_rate_down = 18,            // vendor struct = 18 both directions
       .max_rt_delta = 250,            // 250 ms realtime limit: binds at 12.5 frames x 16 ~ 200 achievable, never clips legitimate ramps
       .type = TorqueDriverLimited,
 
