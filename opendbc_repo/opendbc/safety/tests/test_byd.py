@@ -63,7 +63,7 @@ class TestBydSafetyTorque(BydButtonTestBase, common.PandaCarSafetyTest, common.D
   # LKAS_Active=0) is still blocked, asserted in test_torque_req_mismatch
   NO_STEER_REQ_BIT = True
 
-  DRIVER_TORQUE_ALLOWANCE = 68
+  DRIVER_TORQUE_ALLOWANCE = 120
   DRIVER_TORQUE_FACTOR = 3
 
   def setUp(self):
@@ -179,7 +179,7 @@ class TestBydSafetyLong(BydButtonTestBase, common.PandaCarSafetyTest, common.Dri
   DYNAMIC_MAX_TORQUE = False
   NO_STEER_REQ_BIT = True
 
-  DRIVER_TORQUE_ALLOWANCE = 68
+  DRIVER_TORQUE_ALLOWANCE = 120
   DRIVER_TORQUE_FACTOR = 3
 
   # ACC_CMD accel limits, raw units (0.05, -5): [-4.0, 2.0] m/s2

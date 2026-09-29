@@ -24,20 +24,16 @@ class CarController(CarControllerBase):
     super().__init__(dbc_names, CP, CP_SP)
     self.packer = CANPacker(dbc_names[Bus.pt])
 
-    # lateral state
+    # lateral state (vendor session architecture)
     self.apply_torque_last = 0
     self.apply_angle_last = 0
     self.lkas_active = False
-    self.steer_softstart_limit = 0
     self.lkas_brake_inhibit = False
     self.brake_pressed_counter = 0
     self.brake_release_counter = 0
-    self.angle_gate = False
-    self.angle_settle_counter = 0
-    self.silence_counter = 0
-    self.follow_counter = 0
-    self.follow_active = False
-    self.last_large_angle_frame = -10 ** 9  # far past: no boot-time lockout
+    self.retry_burst = 0      # remaining ReqPrepare frames of the engage/retry burst
+    self.silence_counter = 0  # armed |request|~0 backstop
+    self.angle_hold = False   # large-angle holdback (see values.py)
 
     # SNG auto-resume state
     self.is_sng_check = False
@@ -61,194 +57,111 @@ class CarController(CarControllerBase):
           self.lkas_brake_inhibit = False
 
   def _update_torque_lateral(self, CC, CS):
-    """Default torque path: steer via the LKAS_Output request in ACC_MPC_STATE (790)."""
-    # EPS LKAS operating envelope (values.py fault map): requesting outside it
-    # latches TorqueFailed until ignition-off, killing lateral for the whole
-    # drive. Proven triggers: large |steering angle| (3 reproductions) and any
-    # request during a full-lock-speed swing (route 00000027 seg 1: a parking
-    # unwind swept the wheel through center at ~150 deg/s, the instantaneous
-    # re-arm fired at the 0-crossing, and -48 units into that swing latched
-    # the EPS). So: stand down above the angle/rate limits, and re-arm only
-    # after the wheel has SETTLED - small angle and low rate, held.
-    ang = abs(CS.out.steeringAngleDeg)
-    rate = abs(CS.out.steeringRateDeg)
-    if ang > CarControllerParams.STEER_LARGE_ANGLE:
-      # past the EPS fault line: close the gate and stamp the excursion time
-      self.angle_gate = True
-      self.angle_settle_counter = 0
-      self.last_large_angle_frame = self.frame
-    elif ang > CarControllerParams.STEER_ANGLE_GATE_DEACT or rate > CarControllerParams.STEER_RATE_DEACT:
-      self.angle_gate = True
-      self.angle_settle_counter = 0
-    elif self.angle_gate and ang < CarControllerParams.STEER_ANGLE_GATE_REARM and rate < CarControllerParams.STEER_RATE_REARM \
-          and (self.frame - self.last_large_angle_frame) * DT_CTRL > CarControllerParams.STEER_LARGE_ANGLE_LOCKOUT:
-      self.angle_settle_counter += 1
-      if self.angle_settle_counter >= CarControllerParams.STEER_ANGLE_SETTLE_FRAMES:
-        self.angle_gate = False
-    elif not (ang < CarControllerParams.STEER_ANGLE_GATE_REARM and rate < CarControllerParams.STEER_RATE_REARM):
-      self.angle_settle_counter = 0
+    """Default torque path: steer via the LKAS_Output request in ACC_MPC_STATE (790).
 
-    # EPS warning escalation guard (route c9f1698c82 seg 0, 10th latch): an
-    # armed session chasing an oscillating demand (driver sawing +-100 raw
-    # while the controller saturated to +-full scale) made the EPS raise
-    # SteerErrorCode=2 as a ~0.5 s stand-down warning, then escalate to 4 +
-    # SteerWarning + TorqueFailed - lateral dead until ignition-off. The
-    # vendor controller is EPS-state-driven end to end (need_activate /
-    # standby / lose_frame on the 0x11F bits); err=2 is the EPS's stand-down
-    # request, so obey it: take the same ramp-out path as brake-inhibit and
-    # stand still until the EPS clears the error. On the real timeline this
-    # exits ~0.4 s before the escalation, cleanly and repeatably.
-    lat_active = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill \
-      and not self.angle_gate and not CS.steer_error
+    Session architecture is the vendor's, frame-proven on its own drive logs
+    (route 00000037, docs_site/op_byd_logs/7--12e_0) - the op_byd build never
+    latches the EPS because it never produces a state the EPS rejects:
 
-    # A latched EPS TorqueFailed (real drive, route 0000001c seg 0: fault fired
-    # ~0.7 s into the torque ramp while the driver resisted, then stayed
-    # latched) invalidates everything - stand down to plain idle echo, no
-    # LKAS_Active and no ReqPrepare, until the EPS clears it. Never treat a
-    # stale LKAS_Prepared as armed across the fault.
-    if CS.torque_failed:
-      self.lkas_active = False
-      self.apply_torque_last = 0  # hard cut on fault - no ramp out of an EPS error
+      idle        Config=3, Active=0, lanes 0/0, request 0 streamed
+                  unconditionally (their armed-standby posture)
+      engage      3-frame ReqPrepare burst with lanes 2/2, then Active=1
+                  ~50 ms later - the EPS ack is NOT waited for (EPS
+                  LKAS_Prepared stayed 0 for the vendor's entire drive)
+      in-session  request = model demand through the driver limit, full
+                  authority: they reach -153 against a +166 driver yank and
+                  193 absolute, ~8 sign flips in 27 s (smooth)
+      dropout     Active->0 then IMMEDIATELY re-burst and re-activate within
+                  60-80 ms (twice in the log, zero EPS complaint)
+      disengage   request ramps 52->0 over ~80 ms with lanes still 2/2, lanes
+                  drop to 0/0, then Active=0
 
-    # engage only when the EPS reports the stock LKA prepared; deactivate
-    # only after the request has ramped back to zero (the working vendor build
-    # ramps 52->0 over ~80 ms and then drops Active - a request step straight
-    # from 50 to 0 is something the stock camera never sends)
-    if lat_active and not self.lkas_active and not CS.torque_failed:
-      # arm ONLY on real demand (> 6 units), first engage included. Drive 2
-      # (hour_logs_2) proved the EPS latches TorqueFailed ~0.5 s into an armed
-      # (Config=3/Active=1) session whose request is zero - Re_014, Rf_015,
-      # R13_003 and R15_001 all armed straight into a driver fight (ACC re-SET
-      # / MADS re-engage while the driver held the wheel) and sat at zero
-      # request until the EPS raised SteerWarning and latched. No demand, no
-      # session: the idle echo below is the camera's own standby state.
-      # Arming additionally requires hands-light (STEER_ARM_DRV_TORQUE): the
-      # angle gate's lockout can expire mid-maneuver while the driver still
-      # holds the wheel (route 909633d7ed seg 5 - gate reopened at angle 10
-      # deg/rate 0 with the driver at +83..126, armed into a +151..170 yank,
-      # latched). The vendor arms EPS-state-driven, hands-light only.
-      if abs(CC.actuators.torque) > 0.03 and \
-          abs(CS.out.steeringTorque) < CarControllerParams.STEER_ARM_DRV_TORQUE:
-        if CS.lkas_prepared:
-          self.lkas_active = True
-          self.steer_softstart_limit = 0
-          self.follow_counter = 0
-          self.follow_active = False
-    elif not lat_active and self.apply_torque_last == 0:
-      self.lkas_active = False
+    Every one of our ten TorqueFailed latches was a state the vendor cannot
+    produce: armed-silence from yield-to-zero hesitation, an oscillating
+    capped request stream (follow-flip kept the lateral loop open), or a
+    dithering cold arm. So there is no defense stack here - full-authority
+    output, instant exit-and-retry, and the EPS's own declarations
+    (TorqueFailed / SteerErrorCode) as the only hard stops.
+    """
+    if self.frame % 2 != 0:
+      return None
 
+    drv = CS.out.steeringTorque
+    demand = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
     lkas_req_prepare = 0
+
+    # hard stops - declared by the driver or the EPS itself. The vendor has
+    # no others: it arms at zero request, fights heavy driver torque, and
+    # steers parking maneuvers at 37+ deg and 1-17 km/h.
+    allow = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill \
+      and not CS.torque_failed and not CS.steer_error
+
+    # large-angle holdback (values.py): the one envelope the vendor log does
+    # not cover. Stand down past 50 deg, re-burst below 40 - no settle dance,
+    # the ramp-out plus burst already matches the vendor's exit-retry shape.
+    ang = abs(CS.out.steeringAngleDeg)
+    if ang > CarControllerParams.STEER_LARGE_ANGLE:
+      self.angle_hold = True
+    elif self.angle_hold and ang < CarControllerParams.STEER_LARGE_ANGLE_REARM:
+      self.angle_hold = False
+    allow = allow and not self.angle_hold
+
     if self.lkas_active:
-      # compute at the 50 Hz command rate so the per-command delta limits match
-      # the firmware safety model exactly (the control loop runs at 100 Hz)
-      if self.frame % 2 == 0:
-        # Drive 2 (hour_logs_2) pinned the EPS latch rules byte-for-byte, 6/6:
-        # an armed (Config=3/Active=1) session latches TorqueFailed when its
-        # request is ~zero for ~0.5 s (SteerWarning fires ~0.2 s in first -
-        # R10_000/R13_003 latched 0.48-0.64 s after the old yield-to-zero
-        # parked the request at 0 mid-assist) or when the request OPPOSES the
-        # driver (R16_000: -70 vs +46, under the old 68 allowance). The
-        # working vendor build does neither: through entire drv>150 fights its
-        # request keeps FOLLOWING the driver - nonzero, same direction.
-        # Detect opposition from INTENT (demand), not from the applied output:
-        # apply_driver_steer_torque_limits clamps opposing requests to 0 once
-        # |drv| > ~135 (68 + STEER_MAX/3), so a post-clip test is blind exactly
-        # in the heaviest fights (drive 2 measured drv 111-240) - the request
-        # would sit at 0 and re-create the armed-silence latch this guards
-        # against. Sustained opposition flips the request to a small
-        # same-direction follow; the session never goes silent or opposing
-        # while the driver has the wheel.
-        drv = CS.out.steeringTorque
-        demand = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
-        opposing = demand * drv < 0 and abs(drv) > CarControllerParams.STEER_DRIVER_OPPOSING
-        if opposing:
-          self.follow_counter += 2
-        elif self.follow_counter > 0:
-          self.follow_counter -= 1
-        if self.follow_counter >= 6:
-          self.follow_active = True
-        if self.follow_active and abs(drv) < CarControllerParams.STEER_DRIVER_OPPOSING:
-          self.follow_active = False
-          self.follow_counter = 0
-        # Controller-local deactivations must ramp out: brake inhibit, angle
-        # gate and standstill turn lat_active off while CC.actuators.torque
-        # still carries model demand (MADS default REMAIN_ACTIVE keeps
-        # latActive true under braking), and the driver-limit clip never
-        # zeroes a same-direction request. Without this cut the armed session
-        # keeps steering through braking and into the >50 deg fault zone. The
-        # delta limits give the smooth ramp-out; the apply==0 disarm below
-        # then ends the session.
-        if not lat_active:
-          new_torque = 0
-        elif self.follow_active:
-          new_torque = int(math.copysign(min(abs(demand), CarControllerParams.STEER_FOLLOW_TORQUE), drv))
-        elif opposing:
-          new_torque = 0  # detection window (~3 commands): neither fight nor sit silent
-        else:
-          # vendor yield curve (decrypted op_byd): scale the request down
-          # smoothly as the driver's grip grows - the feel source behind the
-          # vendor's "request follows the driver, never fights" signature.
-          # Same-direction demand is scaled too (a helping hand needs less
-          # assist); the direction itself never flips here.
-          yield_factor = float(np.interp(abs(drv), CarControllerParams.STEER_YIELD_DRV_BP,
-                                         CarControllerParams.STEER_YIELD_FACTOR))
-          new_torque = int(round(demand * yield_factor))
-
-        new_torque = min(max(new_torque, -self.steer_softstart_limit, -CarControllerParams.STEER_MAX),
-                         self.steer_softstart_limit)
-        if self.steer_softstart_limit < CarControllerParams.STEER_MAX:
-          self.steer_softstart_limit += CarControllerParams.STEER_SOFTSTART_STEP
-        self.apply_torque_last = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last,
-                                                                  drv, CarControllerParams)
-
-        # Backstop for genuine zero demand (dead-straight road, hands off): an
-        # armed session may sit at |request| < 2 for at most ~0.16 s. The EPS
-        # raises SteerWarning ~0.2 s into armed silence and latches
-        # TorqueFailed at ~0.5 s (drive 2: every latch came 0.48-0.72 s after
-        # the request hit zero, 6/6). Exit returns to the idle echo - the
-        # camera's own standby state - and the next real demand re-enters:
-        # through the 3-frame prepare burst if the EPS dropped LKAS_Prepared
-        # on our exit, else directly (which it does is unverified - check in
-        # the road-test logs).
-        # While opposition is being detected (or the follow flip is winding
-        # down), this guard must NOT count: the follow machinery owns the
-        # response there (flip at 0.15 s), and counting concurrently raced the
-        # silence exit by a single command frame.
-        if opposing or self.follow_counter > 0:
-          self.silence_counter = 0
-        elif abs(self.apply_torque_last) < 2:
+      if CS.torque_failed:
+        # EPS-declared dead: hard cut, no ramp out of an EPS error (it has
+        # already latched until ignition-off; there is nothing to be graceful
+        # toward)
+        new_torque = 0
+        self.apply_torque_last = 0
+        self.lkas_active = False
+        self.silence_counter = 0
+      elif allow:
+        # armed-silence backstop (see values.py): exit to the retry burst
+        # before the measured 0.48 s latch band when the demand loop itself
+        # has gone quiet
+        if abs(self.apply_torque_last) < 2 and abs(demand) < 6:
           self.silence_counter += 1
-          if self.silence_counter >= CarControllerParams.STEER_SILENCE_FRAMES:
-            self.lkas_active = False
-            self.apply_torque_last = 0
-            self.silence_counter = 0
+          if self.silence_counter >= CarControllerParams.STEER_ZERO_EXIT_FRAMES:
+            allow = False
         else:
           self.silence_counter = 0
+      if allow:
+        new_torque = demand
+      else:
+        # stand-down: ramp the request to zero (vendor exit ramps 52->0 over
+        # ~80 ms), keep Active=1 until it lands, then disarm. If OP is still
+        # engaged and the EPS has not declared a fault, re-burst immediately
+        # - the vendor re-arms a dropped session within 60-80 ms.
+        new_torque = 0
+        if self.apply_torque_last == 0:
+          self.lkas_active = False
+          self.silence_counter = 0
+          if CC.latActive and not CS.torque_failed and not CS.steer_error:
+            self.retry_burst = 3
     else:
-      self.apply_torque_last = 0
-      self.silence_counter = 0
-      if lat_active and not CS.lkas_prepared and not CS.torque_failed \
-          and abs(CS.out.steeringTorque) < CarControllerParams.STEER_ARM_DRV_TORQUE:
-        # ask the EPS to arm LKA; it responds with LKAS_Prepared in ACC_EPS_STATE.
-        # Same hands-light gate as the arm: the EPS acks Prepared even with the
-        # driver gripping hard (it did at +73, route 909633d7ed seg 5), so
-        # requesting prepare mid-fight only builds a session waiting to latch.
+      if allow:
+        # engage/retry burst: 3 frames of ReqPrepare with lanes 2/2, request
+        # 0, then activate. No ack wait - the burst itself is the handshake.
         lkas_req_prepare = 1
+        if self.retry_burst == 0:
+          self.retry_burst = 3
+        self.retry_burst -= 1
+        if self.retry_burst == 0:
+          self.lkas_active = True
+      new_torque = 0
+
+    self.apply_torque_last = apply_driver_steer_torque_limits(
+      new_torque, self.apply_torque_last, drv, CarControllerParams)
 
     # 50 Hz; echo the stock camera's ACC_MPC_STATE so the SETME_* / MPC_State
     # fields match what the DiPilot ADAS domain expects (from-scratch frames
-    # fault the camera). Skip until we have seen the camera's 0x316.
-    if self.frame % 2 == 0 and CS.cam_lkas:
-      # LKAS_Config=3 (ALARM_AND_LKA) is the EPS's actuation-permission
-      # session mode - but ONLY while the session is actually steering or
-      # requesting prepare. An armed session (Config=3, Active=0) that sits
-      # at zero torque latches the EPS (route 00000004 seg16 et al.), so
-      # disengaged/idle frames echo the camera's own standby Config (1/2)
-      # - exactly what the stock camera streams when it is not steering.
-      lkas_config = 3 if (self.lkas_active or lkas_req_prepare) else None
+    # fault the camera). The session Config is 3 in EVERY state - idle
+    # included - because that is the vendor's own idle posture (lanes 0/0
+    # make it standby, not an armed-silent session).
+    if CS.cam_lkas:
       return bydcan.create_lkas_request(
         self.packer, CS.cam_lkas, self.apply_torque_last, self.lkas_active,
-        lkas_req_prepare, lkas_config, (self.frame // 2) % 16)
+        lkas_req_prepare, CarControllerParams.STEER_SESSION_CONFIG, (self.frame // 2) % 16)
     return None
 
   def _update_angle_lateral(self, CC, CS):

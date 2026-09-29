@@ -30,78 +30,40 @@ class CarControllerParams:
   # were plausibility rules on mis-marked (Config=2/State=2) frames, not the
   # real envelope. Our firmware safety limits (300/10/12) stay untouched as
   # upper bounds; deltas 8/10 fit under them.
-  STEER_MAX = 200
+  STEER_MAX = 300
   STEER_STEP = 2            # 50 Hz command rate (100 Hz control loop)
   STEER_DELTA_UP = 8        # per 50 Hz command; firmware safety allows 10
   STEER_DELTA_DOWN = 10     # per 50 Hz command; firmware safety allows 12
-  STEER_DRIVER_ALLOWANCE = 68
+  STEER_DRIVER_ALLOWANCE = 120
   STEER_DRIVER_MULTIPLIER = 3
   STEER_DRIVER_FACTOR = 1
   STEER_ERROR_MAX = 50
-  STEER_SOFTSTART_STEP = 10  # per command; full 0->200 ramp takes ~0.5 s (STEER_DELTA_UP 8 binds, not this; vendor ramps ~9/frame)
-  # Drive 2 (hour_logs_2) EPS latch rules, byte-proven 6/6: an armed
-  # (Config=3/Active=1) session latches TorqueFailed when its request sits at
-  # ~zero for ~0.5 s (SteerWarning fires ~0.2 s in first; the 6 latches came
-  # 0.48-0.72 s after the request hit zero) or when the request OPPOSES the
-  # driver (R16_000: -70 vs +46, under the old 68 allowance). The vendor build
-  # never does either - its request follows the driver, nonzero, through
-  # drv>150 fights. These gate both failure modes at the controller.
-  STEER_SILENCE_FRAMES = 8    # 50 Hz commands: ~0.16 s of armed |request| < 2 -> exit session
-  # Opposition is measured from pre-clip DEMAND: the driver-limit clip zeroes
-  # opposing output past |drv| ~135 (68 + STEER_MAX/3), so an output-based
-  # test goes blind exactly in heavy fights (drive 2 measured 111-240).
-  # 15 sits inside the hands-off noise band (<50, light grip 60-150) - the
-  # sustained counter is the noise filter; raise only with road data (R16
-  # shows opposition is rejected from drv ~18 up).
-  STEER_DRIVER_OPPOSING = 15  # raw EPS driver torque: sustained demand opposition flips to follow
-  STEER_FOLLOW_TORQUE = 20    # same-direction follow request while the driver has the wheel
-  # Vendor yield curve (decrypted op_byd apply_byd_steer_torque_limits): the
-  # request is scaled down smoothly as |driver torque| grows instead of the
-  # binary clip. Applied on the NORMAL path only - opposing requests still go
-  # through the detection-window/follow machinery below, so a scaled-to-zero
-  # opposing request (armed-silence) can never be emitted and the driver-limit
-  # clip zero (68 + 200/3 ~ 186.7) is unreachable by construction. Endpoint
-  # 186 keeps the curve zero co-located with that clip zero.
-  STEER_YIELD_DRV_BP = [50., 120., 186.]
-  STEER_YIELD_FACTOR = [1.0, 0.5, 0.0]
-  # Arming gate (route 909633d7ed seg 5, 9th latch): the angle gate reopened
-  # mid-maneuver (angle 10 deg, rate 0-4 deg/s - all its conditions met) while
-  # the driver held the wheel at +83..126 raw torque, the session armed cold
-  # into a building driver yank (+151..170 by the time the softstart ramp
-  # reached +61) and the EPS latched SteerWarning 0.2 s in / TorqueFailed
-  # 0.7 s in - lateral dead for the whole drive (ignition-off reset). The
-  # angle/rate gates measure the WHEEL, not the driver; the vendor never arms
-  # like this: its session start is EPS-state-driven (is_steering_need_activate
-  # on the 0x11F LKSPrepare/Cruise_Activated pair, decrypted op_byd) and all
-  # its observed engages are hands-light at driving speed. Gate the prepare
-  # request and the arm on that same hands-light condition, taken at the yield
-  # curve's grip-onset breakpoint: below 50 the vendor still applies full
-  # assist, so the driver is not really holding the wheel. In-session fights
-  # stay with the yield curve / follow machinery (vendor behavior).
-  STEER_ARM_DRV_TORQUE = 50   # raw EPS driver torque; no ReqPrepare / arm above this
-  # EPS LKAS fault gates, all measured on mis-marked frames (before the
-  # Config=3 session fix). They never fired in the vendor's clean steering
-  # (which has no such gates), so these are extra conservatism on top of the
-  # vendor-proven envelope - revisit if they feel intrusive.
-  STEER_ANGLE_GATE_DEACT = 40.   # deg, stand down above this
-  STEER_ANGLE_GATE_REARM = 30.   # deg, allow requests again below this
-  # Re-arming additionally requires the wheel SETTLED: route 00000027 seg 1
-  # faulted when a parking-turn unwind swept the wheel through center at
-  # ~150 deg/s - the instantaneous re-arm fired at the 0-crossing and the EPS
-  # latched TorqueFailed on a request into a full-lock-speed swing. Normal
-  # driving in the same log peaked at 129 deg/s, so re-arm needs < 40 deg/s
-  # held for 0.3 s; violent swings (> 180 deg/s) stand down at any time.
-  STEER_RATE_DEACT = 180.        # deg/s, stand down above this at any time
-  STEER_RATE_REARM = 40.         # deg/s, re-arm requires rate below this
-  STEER_ANGLE_SETTLE_FRAMES = 30  # 0.3 s at the 100 Hz control loop
-  # Route 0000002a fault 5: all five TorqueFailed latches happened seconds
-  # after a >50 deg excursion (parking-turn unwind), while two long clean
-  # windows were pure forward driving - the EPS refuses LKAS requests for a
-  # while after the wheel has been far off center (the stock camera's own LKAS
-  # state machine does the same). Lock requests out for 10 s after the last
-  # >50 deg sample, on top of the settle requirement.
-  STEER_LARGE_ANGLE = 50.        # deg, the proven fault line
-  STEER_LARGE_ANGLE_LOCKOUT = 10.  # s after the last large-angle sample
+  # STEER_MAX/ALLOWANCE are the vendor's own firmware numbers (STEER_MAX=300,
+  # ALLOWANCE=120, decrypted op_byd): the vendor reaches -153 against a
+  # +166 driver yank and 193 absolute in clean steering, which the standard
+  # driver-limit formula only permits with (300, 120) - under (200, 68) any
+  # opposing request clips to ZERO once |drv| > 134.7, which is exactly the
+  # armed-silence the EPS latches on. Our firmware byd.h caps at 300/10/12
+  # already; its driver_torque_allowance must match this 120.
+  # Armed-silence backstop: our instrumented sessions latched TorqueFailed
+  # after 0.48-0.72 s of armed |request| ~ 0 (drive 2, 6/6). The vendor never
+  # sits there - not because it gates anything, but because its demand loop
+  # is always steering. Exit to the retry burst just before the measured
+  # latch band; the ReqPrepare burst itself is a stream the EPS sees between
+  # every vendor session and never objects to.
+  STEER_ZERO_EXIT_FRAMES = 21  # 50 Hz commands: ~0.42 s armed at |request| < 2 -> exit + re-burst
+  # Large-angle holdback - the one envelope the vendor log does not cover
+  # (its max observed angle is 37 deg). Our old >50 deg latches all happened
+  # through hesitation mechanics that no longer exist, but with no vendor
+  # evidence past 37 deg, stand down there and re-burst below 40.
+  STEER_LARGE_ANGLE = 50.        # deg, stand down above this
+  STEER_LARGE_ANGLE_REARM = 40.  # deg, re-burst below this
+  # The vendor streams Config=3 in EVERY session state - idle included
+  # (route 00000037: 16 s of Cfg=3/Act=0/lanes 0/0 standby at boot, and
+  # between every session). Lanes 0/0 make it standby, not an armed-silent
+  # session; the "Config=3 idle latches" reading came from our early
+  # from-scratch frames that missed the SETME_* fields.
+  STEER_SESSION_CONFIG = 3
   # driver torque for steeringPressed (raw EPS scale: hands-off noise <50,
   # light grip 60-150)
   STEER_THRESHOLD = 80  # TODO(Song Plus DM-i): calibrate

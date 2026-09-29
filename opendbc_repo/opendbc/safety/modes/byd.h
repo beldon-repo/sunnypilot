@@ -172,7 +172,11 @@ static bool byd_tx_hook(const CANPacket_t *msg) {
       .type = TorqueDriverLimited,
 
       // matches python STEER_DRIVER_ALLOWANCE / STEER_DRIVER_MULTIPLIER
-      .driver_torque_allowance = 68,
+      // (vendor firmware numbers, STEER_MAX=300/ALLOWANCE=120: its real
+      // traffic reaches -153 against a +166 driver yank and 193 absolute -
+      // under 68 the driver-limit clip zeroes opposing requests past
+      // |drv| ~135, which is exactly the armed-silence the EPS latches on)
+      .driver_torque_allowance = 120,
       .driver_torque_multiplier = 3,
 
       .max_torque_error = 350,

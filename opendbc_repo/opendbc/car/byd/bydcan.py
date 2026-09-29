@@ -66,19 +66,27 @@ def create_lkas_request(packer, cam_msg, apply_torque, lkas_active, lkas_req_pre
   values = {s: cam_msg[s] for s in _ACC_MPC_STATE_ECHO_FIELDS if s in cam_msg}
   values["ReqHandsOnSteeringWheel"] = 0
   values["LKAS_ReqPrepare"] = lkas_req_prepare
-  if lkas_config is not None:
-    values["LKAS_Config"] = lkas_config   # None = echo the camera's value
+  values["LKAS_Config"] = lkas_config   # the vendor streams 3 in every state (idle included)
   values["Counter"] = raw_cnt
 
   if lkas_active:
     values.update({
       "LKAS_Output": apply_torque,   # steer torque request
       "LKAS_Active": 1,
-      # The actuation gate is LKAS_Config=3 (ALARM_AND_LKA session - set by the
-      # caller), NOT the state field: the working vendor build (op_byd, route
-      # 00000037) sends exactly (State=1, MPC=0, Config=3, Active=1, lanes 2/2)
-      # and steers, while our (State=2, Config=2) frames were accepted, echoed
-      # in MainTorque, never faulted below 55 units - and never moved the wheel.
+      # The actuation gate is LKAS_Config=3 (ALARM_AND_LKA session), NOT the
+      # state field: the vendor build (op_byd, route 00000037) steers with
+      # exactly (State=1, MPC=0, Config=3, Active=1, lanes 2/2).
+      "LKAS_State": 1,
+      "LeftLaneState": 2,
+      "RightLaneState": 2,
+    })
+  elif lkas_req_prepare:
+    # engage/retry burst: the vendor's 3-frame prepare carries lanes 2/2 with
+    # Active=0 and request 0 (route 00000037 t=16.78), then activates 50 ms
+    # later without waiting for the EPS ack
+    values.update({
+      "LKAS_Output": 0,
+      "LKAS_Active": 0,
       "LKAS_State": 1,
       "LeftLaneState": 2,
       "RightLaneState": 2,
@@ -87,7 +95,9 @@ def create_lkas_request(packer, cam_msg, apply_torque, lkas_active, lkas_req_pre
     values.update({
       "LKAS_Output": 0,
       "LKAS_Active": 0,
-      # vendor idle: lanes 0/0 (no LKA target without lane detection)
+      # vendor standby: Config=3 with lanes 0/0 (no LKA target) - streamed
+      # for minutes at a time on the vendor's own drive without EPS complaint
+      "LKAS_State": 1,
       "LeftLaneState": 0,
       "RightLaneState": 0,
     })
