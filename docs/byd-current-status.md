@@ -8,7 +8,10 @@
 
 横向已切换为**厂商会话架构**并实车验证"效果和厂商差不多"（用户原话）；
 Controls Mismatch 死锁已修复部署（`0cfd780854`）；固件 `fec63fda` 已构建提交，
-**设备刷写签名验证尚未完成**（reboot 后验证被打断）——新 session 第一件事就是补验。
+**设备刷写签名验证已完成**（2026-09-29 晚：设备 get_signature() 与本地 bin 尾
+128 字节逐位一致 = uno 新固件；GitCommit 同步确认 0cfd780854、无 CAN 故障）。
+本地验证也全绿：latch 套件 11 场景、两条真实 route 回放 CLEAN（见 §五 C-3）。
+**剩下的全部是实车项（§五 B）——开车验证是当前唯一主线**。
 
 ## 二、状态快照
 
@@ -17,7 +20,7 @@ Controls Mismatch 死锁已修复部署（`0cfd780854`）；固件 `fec63fda` �
 | 分支 / HEAD | `main-c3l-tici` @ `0cfd780854`（全部未推送 origin） |
 | 设备 | comma@192.168.31.44，GitCommit=0cfd780854（deploy 已 reset） |
 | 部署固件 | fw_base(0.9.x) 构建，bin sha=fec63fda…，uno+h7 已入库（`panda/board/obj/`，gitignore 需 -f） |
-| 设备固件刷写验证 | **未完成**（见 §五 A） |
+| 设备固件刷写验证 | **✓ 完成**（2026-09-29 晚，签名 128 字节逐位匹配 uno 新 bin） |
 | AlphaLongitudinalEnabled | **OFF**（纵向走原车 ACC；固件无 Phase 2 纵向，自洽） |
 | NNLC（NeuralNetworkLateralControl） | ON（权重 json 在设备，从未路测标定） |
 
@@ -51,13 +54,15 @@ Controls Mismatch 死锁已修复部署（`0cfd780854`）；固件 `fec63fda` �
 
 ## 五、待验证清单（按优先级）
 
-### A. 设备验证（新 session 第一件事，纯 SSH）
-1. `cat /data/params/d/GitCommit` = `0cfd780854…` ✓（deploy 已确认 reset 成功）
-2. **固件刷写补验**：读运行签名并与新 bin 比对——
-   `PYTHONPATH=/data/openpilot python3 -c "from panda import Panda; print(Panda().get_signature()[:8].hex())"`
-   得到的 hex 应能在本地 `panda/board/obj/panda.bin.signed` 中找到（签名块在 offset ~57568）。
-   若不匹配：确认无 `/data/panda_skip_flash`，重启一次让 pandad 重刷。
-3. 点火后 CAN 正常（pandaStates 10Hz、byd@35、无 CAN Error 告警）。
+### A. 设备验证（✓ 2026-09-29 晚完成，设备 192.168.31.44）
+1. GitCommit = `0cfd780854…` ✓（deploy 确认）
+2. **固件刷写 ✓**：设备 `get_signature()` 128 字节与本地 `panda.bin.signed` 尾 128 字节
+   逐位一致（首 8 字节 uno `51ccab3e3af4c7ff` / h7 `2b09882f8041d8ad`；签名块在 bin 尾部
+   offset ~57572）。注意用 `/usr/local/venv/bin/python3`（系统 python3 无 usb1 模块）。
+   远程通道不可用：DongleId = `UnregisteredDevice`（未注册 comma 账号）；
+   0580020f… 等三个 id 是厂商 route 的，不是本机。
+3. CAN 静态 ✓（点火前：pandaStates 10Hz、faults=[]、safety=noOutput/0 正常姿态）；
+   **byd@35 + bus0 流量需点火后确认**（随 §五 B 首次路测顺带看）。
 
 ### B. 实车验证（对应两个用户反馈的修复）
 1. **mismatch 死锁修复（最关键）**：行驶中刹车取消 → 不停车直接重新 SET ACC →
@@ -79,6 +84,9 @@ Controls Mismatch 死锁已修复部署（`0cfd780854`）；固件 `fec63fda` �
 3. **横向环稳定性**：route c9f1698c82 出现过 demand ±130 饱和振荡（3Hz）。
    架构重写后环已闭环，但未实车确认；下次 route 直接查我方 TX 的 sign-flips
    （厂商包络：27s 内 8 次）与 armed-silence。
+   **本地回放已过（2026-09-29）**：c9f1698c82--0 与 909633d7ed--5（根因 15 泊车
+   场景）灌新控制器均 CLEAN——armed-silence 最差 0.02s/0.08s（锁存带 0.48-0.72s），
+   sign flips 均 5 次（包络 8/27s）；replay_latches.py 11 场景全绿。仅剩实车确认。
 4. NNLC A/B：NN 权重从未标定，若振荡复现先关 NeuralNetworkLateralControl 对比。
 5. 厂商行为还原（ELF `byd_adjust_steer_torque` 可反汇编）：get_byd_torque_limits 的
    LOW flag 选择、24s 连续转向降额+SDA、STEERING_TORQUE_LIMIT_SPEED 速度曲线。
