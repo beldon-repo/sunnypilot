@@ -1,31 +1,30 @@
 # BYD 宋 PLUS DM-i 移植 · 现状总览（新 Session 入口）
 
-> 最后更新：2026-09-29 晚。本文是**当前状态的唯一权威快照**；历史根因全录见
-> `docs/byd-song-plus-lkas-debug.md`（6.1-6.30），厂商对齐设计见 `docs/byd-vendor-alignment.md`。
+> 最后更新：2026-09-30 深夜。本文是**当前状态的唯一权威快照**；历史根因全录见
+> `docs/byd-song-plus-lkas-debug.md`（6.1-6.30），厂商对齐设计见 `docs/byd-vendor-alignment.md`，
+> **v2 实车复验结果见 `docs/byd-v2-validation.md`（2026-09-30，4 项新发现待拍板）**。
 > 冲突时以本文为准。
 
 ## 一、一句话现状
 
-横向已切换为**厂商会话架构**；Controls Mismatch 死锁已修复部署（`0cfd780854`）；
-固件 `fec63fda` 刷写签名验证完成（128 字节逐位一致）。**根因 16（0000000a 三击
-TF 锁存）第一版修复（CruiseActivated 许可门 `2c28a0cd09`）是错的——c 位是 EPS
-会话相位标志而非许可，实车死锁两段零控车（0000000d，7218 帧 TX 全零）**；二次
-修正已部署（`51b1a25a5f`，设备已重启确认在跑）：撤 c 门 + 保留手轻武装门 +
-新增请求包络 STEER_MAX_REQUEST=200（厂商全程 max 193、等待相位最长 2.86s 从不
-rail）。**下一步 = 实车复验修正版**：ACC 挂上后应有辅助（EPS 激活可能秒级等待，
-正常）；重点观察 sign flips（0000000d 回放伪影 46 vs 阈值 40，实车判别）与
-err=2 不升级。
+横向 = **厂商会话架构 v2**（`51b1a25a5f`：撤 c 门 + 手轻武装门 + 请求包络 200），
+**实车复验已通过**（2026-09-30 两段 route 0000000e/f：整体能控、零 TorqueFailed、
+err 不升级、armed 时段 72-84% EPS 真执行——死锁/锁存史上的 10 个根因全部关闭）。
+**下一步 = v3 小改拍板**（复验暴露 4 项，全不锁存）：①NNLC A/B（振荡第一嫌疑）
+②需求振荡杠杆（governor/EMA，sign flips 已坐实）③boot-mid-cruise engage 边沿吞噬
+（ACC 先开→设备后启动不控车，实测 20.6s）④等待相位 windup（c=0 时 demand rail 200）。
+另有 ACC bounce 风暴观察项（armed 时雷达 ACA 2Hz 打摆 → 我方 0x316 退场流空洞，
+贴线未升级），详见复验报告 §四。
 
 ## 二、状态快照
 
 | 项 | 值 |
 |---|---|
-| 分支 / HEAD | `main-c3l-tici` @ `0cfd780854`（全部未推送 origin） |
-| 设备 | comma@192.168.31.44，GitCommit=0cfd780854（deploy 已 reset） |
-| 部署固件 | fw_base(0.9.x) 构建，bin sha=fec63fda…，uno+h7 已入库（`panda/board/obj/`，gitignore 需 -f） |
-| 设备固件刷写验证 | **✓ 完成**（2026-09-29 晚，签名 128 字节逐位匹配 uno 新 bin） |
-| AlphaLongitudinalEnabled | **OFF**（纵向走原车 ACC；固件无 Phase 2 纵向，自洽） |
-| NNLC（NeuralNetworkLateralControl） | ON（权重 json 在设备，从未路测标定） |
+| 分支 / HEAD | `main-c3l-tici`（本地含复验后文档；推送状态见 §五C-1） |
+| 设备 | comma@192.168.31.44，GitCommit=`9a46d312e4`（= v2 `51b1a25a5f` + 文档提交） |
+| 部署固件 | fw_base(0.9.x) 构建，bin sha=fec63fda…，uno+h7 已入库（`panda/board/obj/`，gitignore 需 -f）；签名比对 ✓ |
+| AlphaLongitudinalEnabled | **OFF**（纵向走原车 ACC；2026-09-30 设备实测参数不存在；固件无 Phase 2 纵向，自洽） |
+| NNLC（NeuralNetworkLateralControl） | ON（权重 json 在设备，从未路测标定；**复验发现需求振荡，A/B 是 v3 第一候选**） |
 
 ## 三、横向控制器现状（`opendbc_repo/opendbc/car/byd/`）
 
@@ -67,17 +66,14 @@ err=2 不升级。
 3. CAN 静态 ✓（点火前：pandaStates 10Hz、faults=[]、safety=noOutput/0 正常姿态）；
    **byd@35 + bus0 流量需点火后确认**（随 §五 B 首次路测顺带看）。
 
-### B. 实车验证（对应两个用户反馈的修复）
-1. **mismatch 死锁修复（最关键）**：行驶中刹车取消 → 不停车直接重新 SET ACC →
-   控车应在 ~0.1s 内恢复（会话 burst 即刻重连）；60 秒内不得出现 "Controls Mismatch"。
-   复现原 route 00000009--19610c61f2 的场景（469.7s 刹车取消 + 472.5s 重 SET）。
-2. **爬行大弯/泊车全程有辅助**：>50° 大角度不再静默（holdback 已删），
-   对齐厂商 2-17km/h 照转的行为。
-3. **armed-零背停平顺性**：直道脱手 0.42s 后会退场+burst 重连，观感是否可接受
-   （EPS 侧安全，纯手感问题）。
-4. **err=2 警告频率**：若 SteerErrorCode=2 频繁出现 → 请求流仍让 EPS 不满
-   （嫌疑=横向环振荡），见 C-3。
-5. 手感预期：对抗时 OP 正面出力（变"硬"）= 厂商原味，不是 bug。
+### B. 实车验证（✓ v2 复验 2026-09-30 完成，详见 `byd-v2-validation.md`）
+1. **mismatch 死锁修复 ✓**：route f 多次"行驶中取消 → 重 SET"循环（22.9/216.3/226.7s
+   ACC 中断后重进）全部正常恢复控车，全程无 "Controls Mismatch"。
+2. **爬行大弯/泊车全程有辅助**：未专项验证（route e 235s 见过 +23° 时段但为司机打盘）。
+3. **armed-零背停平顺性**：退场/re-burst 机制工作，但被 ACC bounce 风暴放大成断续
+   （复验报告 §四）；体验问题并入 v3 拍板清单。
+4. **err=2 警告频率 ✓**：9 seg 零 err≥2 记录。
+5. 手感：用户反馈"整体有控车、效果还不错"；对抗时正面出力 = 厂商原味。
 
 ### C. 遗留工程（实车干净后再动）
 1. **推送 origin**：`28145a1c3b`（Phase 2 纵向）到 `0cfd780854` 全部未推送。
@@ -104,6 +100,10 @@ err=2 不升级。
 | 厂商实车日志 | `docs_site/op_byd_logs/`（route 35/36/37） | 会话生命周期/标定全部出自 7--12e_0 |
 | 厂商解密源码 | `/Users/wujiafu/Documents/op/cp_byd/docs/pyarmor_decrypted/` | disasm+values 100% 覆盖 |
 | **三方对照+手册经验库** | `docs/byd-control-lessons.md` | 厂商/yysnet/官方手册可吸收项与决策树（新 session 先读） |
+| **v2 实车复验报告** | `docs/byd-v2-validation.md` | 2026-09-30 route 0000000e/f 全量分析：v2 达成项 + 4 项新发现（ACC bounce/流空洞/windup/振荡/boot 边沿吞噬）+ v3 待拍板清单 |
+| **v2 复验数据+脚本** | `docs_site/byd_v2_validation/` | rlog 9 段 + 21 个脚本（13 分析 + 8 调试迭代）+ src 编码备忘（gitignore 本地） |
+| **代码 review 报告** | `docs/byd-code-review.md` | 09-28~09-30 提交的全量 review：2 高危（0x122 vehicle_moving / 0x32E echo-relay）+ 4 中危 + 低危清单 |
+| **控车专项深度 review** | `docs/byd-control-deep-review.md` | 聚焦"能否真正控住车"：会话状态机核对（正确）+ 7 项控车风险（轻握即脱/0x316 断流/纵向拦原厂制动/固件限速集不匹配/MADS 解耦/lead 锁死/缩放 67%） |
 | 官方维修手册文本 | `docs_site/pdf/2021年款比亚迪宋PLUS DMi-01-维修手册-*.txt` | ACC+MPC 分册（EPS 分册缺，SteerErrorCode 码表仍在找） |
 | 回放套件 | `docs_site/hour_logs_2/replay_latches.py` | 11 场景（厂商语义），本地跑：`PYTHONPATH=$PWD/opendbc_repo:$PWD .venv/bin/python …` |
 | route 回放 | `docs_site/hour_logs_2/replay_routes_new.py` | 真实 route 灌新控制器（本地，rlog 样本在 /tmp/byd_routes/ 会丢可重拉） |

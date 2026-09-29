@@ -94,12 +94,15 @@ new_steer_pu = np.clip(steer_desire, -self.steerRateLim, self.steerRateLim)
 
 ## 五、吸收决策树（挂接根因 16 v2 实车验证）
 
-**纪律：v2（`51b1a25a5f`）实车验证完成前，不动任何控制行为。**
+**v2 复验已完成（2026-09-30，route 0000000e/f，详见 `byd-v2-validation.md`）：整体能控、
+零锁存、包络/手轻门均工作，但"什么都不加"不成立——下表第 2/3 行已实车触发。**
 
 | 实车 v2 表现 | 动作 | 选项（按优先级） |
 |---|---|---|
-| 收敛、无 dither、手感正常 | **什么都不加**——现架构即厂商原味 | — |
+| 收敛、无 dither、手感正常 | ~~什么都不加~~（未成立） | — |
 | 出现 ~0.6Hz 翻向 dither（sign flips 观察项坐实） | 上平滑/限幅杠杆 | ① yysnet 转角速率 governor（param 默认关，A/B）；② 厂商 EMA（tau 型低通） |
+| 等待相位（c=0）demand rail 到包络、EPS 激活瞬间全额释放 | 抑制 windup | c=0 时冻结/衰减 demand（厂商环"几乎不积分全靠前馈"不 windup；**先做 NNLC 关/开 A/B**——NN 未标定是第一嫌疑） |
+| ACC armed 时雷达 ACA 打摆（Notify=8，16/16 全在 armed 时段） | 修上游观察 | 无直接杠杆——先修振荡再复测；0x316 退场空洞是其下游（退场斜坡 vs controls_allowed 冲突），上游平息后仍现再动 |
 | 高速段对抗吃力/过冲 | 收紧高速窗口 | 厂商速度插值 allowance（`np.interp(v,[50,120,200],[1,0.5,0])`，先确认自变量单位） |
 | 长时间脱手引发 EPS 抱怨 | 自己先退场 | 厂商 hands-off 计时器（注意：宋不在厂商 ALT_HANDSOFF_CARS 列表 + 本车 hands 位恒 0，双重降级 P2） |
 
