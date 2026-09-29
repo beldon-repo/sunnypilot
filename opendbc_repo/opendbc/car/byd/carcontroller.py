@@ -62,11 +62,13 @@ class CarController(CarControllerBase):
     (route 00000037, docs_site/op_byd_logs/7--12e_0) - the op_byd build never
     latches the EPS because it never produces a state the EPS rejects:
 
-      power line  the EPS's own CruiseActivated bit gates EVERYTHING: the
-                  vendor's logs show zero actuation across 3119 c=0 frames,
-                  and its state machine keys on the bit
-                  (is_steering_activated = LKSPrepare & Cruise_Activated).
-                  Sessions only exist while the EPS's ACC is active.
+      activation the EPS's CruiseActivated bit is its session-PHASE flag
+                 ("executing now"), raised only after it accepts a session.
+                 The vendor streams Active=1 with c=0 for up to 2.9 s and
+                 waits - our c-gated build deadlocked for two full drives
+                 (route 0000000d: 7218 TX frames, all zero). Stream and
+                 wait; the bounded request + hands-light arming keep the
+                 waiting phase harmless (root cause 16, corrected).
       idle        Config=3, Active=0, lanes 0/0, request 0 streamed
                   unconditionally (their armed-standby posture)
       engage      3-frame ReqPrepare burst with lanes 2/2, then Active=1
@@ -92,24 +94,32 @@ class CarController(CarControllerBase):
 
     drv = CS.out.steeringTorque
     demand = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
+    # Request envelope (root cause 16, corrected): the vendor's own drive
+    # never exceeds 193 absolute - INCLUDING its waiting-for-activation
+    # phase (up to 2.9 s at Active=1 while the EPS still reports
+    # CruiseActivated=0, route 7--12e: 415 waiting frames). The uncapped
+    # loop railed at +-300 in exactly that phase (open-loop windup), and the
+    # residue on the bus at err=2 is what escalated to err=4 + TorqueFailed.
+    demand = max(-CarControllerParams.STEER_MAX_REQUEST, min(CarControllerParams.STEER_MAX_REQUEST, demand))
     lkas_req_prepare = 0
 
-    # The EPS executes LKA only while its own CruiseActivated=1. Frame-proven
-    # twice: the vendor's own logs (route 7--12e: 3119 c=0 frames, ZERO
-    # actuation; its state machine is literally built on the bit -
-    # is_steering_activated = LKSPrepare & Cruise_Activated) and our route
-    # 0000000a (four railed dead sessions at c=0, each one open-loop windup
-    # that slammed the wheel the instant c flipped to 1). So the bit is the
-    # session's power line, not a defensive tower: with the EPS's ACC off we
-    # stream the idle posture, and the ACC engage arms a FRESH session - no
-    # pending demand is ever carried across the gate.
-    eps_cruise_active = bool(CS.eps_state_msg["CruiseActivated"])
+    # The EPS's CruiseActivated bit (0x318 bit1) is its own session-PHASE
+    # flag - "I am executing a session" - not a permission and not the
+    # stock-ACC state. Proven in both directions: the vendor streams
+    # Active=1 with c=0 for up to 2.9 s waiting for the EPS to activate
+    # (route 7--12e), and our own c-gated build streamed pure idle for two
+    # full drives (route 0000000d) because the EPS only raises the bit AFTER
+    # accepting a session we never sent - a deadlock. So: stream the session
+    # and let the EPS activate when it decides (driver hands being the
+    # dominant observable); what keeps the waiting phase safe is the bounded
+    # request above and arming only at hands-light moments
+    # (STEER_ARM_DRV_TORQUE, root cause 15).
 
     # hard stops - declared by the driver or the EPS itself. The vendor has
     # no others: it arms at zero request, fights heavy driver torque, and
     # steers parking maneuvers at 37+ deg and 1-17 km/h.
-    allow = CC.latActive and eps_cruise_active and not self.lkas_brake_inhibit \
-      and not CS.out.standstill and not CS.torque_failed and not CS.steer_error
+    allow = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill \
+      and not CS.torque_failed and not CS.steer_error
 
     if self.lkas_active:
       if CS.torque_failed:
@@ -135,13 +145,13 @@ class CarController(CarControllerBase):
       else:
         # stand-down: ramp the request to zero (vendor exit ramps 52->0 over
         # ~80 ms), keep Active=1 until it lands, then disarm. If OP is still
-        # engaged and the EPS is live again, re-burst immediately - the
-        # vendor re-arms a dropped session within 60-80 ms.
+        # engaged and the EPS has not declared a fault, re-burst immediately
+        # - the vendor re-arms a dropped session within 60-80 ms.
         new_torque = 0
         if self.apply_torque_last == 0:
           self.lkas_active = False
           self.silence_counter = 0
-          if CC.latActive and eps_cruise_active and not CS.torque_failed and not CS.steer_error:
+          if CC.latActive and not CS.torque_failed and not CS.steer_error:
             self.retry_burst = 3
     else:
       if allow and abs(drv) < CarControllerParams.STEER_ARM_DRV_TORQUE:

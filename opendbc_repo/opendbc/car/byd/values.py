@@ -61,6 +61,15 @@ class CarControllerParams:
   # ARM (burst -> active), never the in-session fight (the vendor outputs
   # -153 against a +166 driver yank).
   STEER_ARM_DRV_TORQUE = 50
+  # Request envelope (root cause 16, corrected): the vendor's own drive never
+  # exceeds 193 absolute - INCLUDING its waiting-for-activation phase (up to
+  # 2.9 s at Active=1 while the EPS still reports CruiseActivated=0, route
+  # 7--12e: 415 waiting frames). The uncapped loop railed at +-300 in exactly
+  # that phase (open-loop windup) and the residue on the bus at err=2 is what
+  # escalated to err=4 + TorqueFailed; the vendor ELF also carries
+  # HIGH error=200. STEER_MAX=300 stays the EPS absolute limit for the
+  # firmware; the controller never emits past this envelope.
+  STEER_MAX_REQUEST = 200
   # The vendor streams Config=3 in EVERY session state - idle included
   # (route 00000037: 16 s of Cfg=3/Act=0/lanes 0/0 standby at boot, and
   # between every session). Lanes 0/0 make it standby, not an armed-silent
