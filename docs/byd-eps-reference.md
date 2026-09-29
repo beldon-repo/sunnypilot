@@ -1,7 +1,7 @@
 # BYD 宋 PLUS DM-i EPS（LKAS 执行器）参考手册
 
-> 汇总自 14 个根因的实车调试全记录（`byd-song-plus-lkas-debug.md`）。所有结论以**本车实车 CAN 日志**为依据，参考实现（yysnet/opendbc、op_byd 厂商系统、mouxangithub）仅作旁证并标注验证边界。
-> 本文是"现在时"快照：每条规则给出证据与复现次数，未定论项集中在 §11。最后更新：2026-09-28（根因 14 修复，47b8c5cb）。
+> 汇总自 16 个根因的实车调试全记录（`byd-song-plus-lkas-debug.md`）。所有结论以**本车实车 CAN 日志**为依据，参考实现（yysnet/opendbc、op_byd 厂商系统、mouxangithub）仅作旁证并标注验证边界。
+> 本文是"现在时"快照：每条规则给出证据与复现次数，未定论项集中在 §11。最后更新：2026-09-29（根因 16 修复，2c28a0cd09；控制器已重写为厂商会话架构，§4/§10 同步刷新）。
 
 ---
 
@@ -17,7 +17,7 @@
 | 报文 | ID | 频率 | 总线 | 方向 | 作用 |
 |---|---|---|---|---|---|
 | ACC_MPC_STATE | 0x316 | 50 Hz | bus0（OP 发送） | OP→EPS | LKAS 命令：扭矩 / 会话模式 / 握手 |
-| ACC_EPS_STATE | 0x318 | 50 Hz | bus0 | EPS→OP | 反馈：Prepared / TorqueFailed / SteerWarning / 扭矩 |
+| ACC_EPS_STATE | 0x318 | 50 Hz | bus0 | EPS→OP | 反馈：Prepared / **CruiseActivated（执行电源线）** / TorqueFailed / SteerWarning+err / 扭矩 |
 | EPS | 0x11F | 100 Hz | bus0 | EPS→ | SteeringAngle / SteeringAngleRate（4°/s/bit，0-1020） |
 | PCM_BUTTONS | 0x3B0 | 10 Hz | bus0 | 车身→ | ACC 按键（OP 伪造 resume；fwd 不阻断） |
 | ACC_HUD_ADAS / ACC_CMD | 0x32D / 0x32E | 20 Hz | bus2 | 相机→ | ACC 状态 / 激活；真实转发（厂商曾整套伪造，我们不需要） |
@@ -39,7 +39,7 @@ DBC：`opendbc_repo/opendbc/dbc/byd_general_pt.dbc`；固件侧安全模型：`o
 | Counter | 52\|4 | 0-15 循环 |
 | CheckSum | 56\|8 | `byd_checksum(0xAF, dat)`——与相机原发帧逐字节对拍全部 MATCH |
 
-**九条规则（全部实车字节级验证，括号为调试记录出处）**：
+**十条规则（全部实车字节级验证，括号为调试记录出处）**：
 
 1. SETME_*/MPC_State 等回显字段不可缺省——从零构造 = 非法帧 → ADAS 域故障"check multifunction video controller"（根因 2，`1432de9`）。
 2. 校验算法 0xAF 已对拍验证（调试记录 二.2）。
@@ -47,37 +47,41 @@ DBC：`opendbc_repo/opendbc/dbc/byd_general_pt.dbc`；固件侧安全模型：`o
 4. LaneState 必须 =2，否则 EPS 不执行 LKA（调试记录 二.4）。
 5. Config 组合合法性：`Config=1(ALARM)+LaneState=2` 是非法组合 → EPS 锁 SteerWarning、拒绝 armed；请求 LKA 时 Config=2（调试记录 二.5）。
 6. **50Hz 连续流不可断**——断流 → SteerWarning 锁存 → 拒绝 armed → MPC 报"视频控制器"（根因 1，`8496a71` 无条件发送）。
-7. **出力许可 = LKAS_Config=3**。厂商模板：激活帧 `(State=1, MPC=0, Config=3, Active=1, Lane 2/2)`，待机帧 `(1,0,3,0, Lane 0/0)`；相机待机只发 1/2、从不发 3——echo 永远拿不到出力许可（根因 11，`da3c4e2`）。
+7. **流形态许可 = LKAS_Config=3**。厂商模板：激活帧 `(State=1, MPC=0, Config=3, Active=1, Lane 2/2)`，待机帧 `(1,0,3,0, Lane 0/0)`；相机待机只发 1/2、从不发 3——echo 永远拿不到出力许可（根因 11，`da3c4e2`）。Config=3 只是流形态，**执行许可另需 EPS 侧 CruiseActivated=1（规则 10）**。
 8. LKAS_State 用 1：6.12 曾改 2 是错误方向（state=2 帧会被接受回显但助力不介入，且包络变窄），厂商字节模板 State=1（根因 10 → 11 更正）。
 9. **armed 会话（Config=3 + Active=1）的行为约束**：请求不得长时静默、不得与驾驶员对向——见 §6 锁存规则（根因 13/14）。
+10. **执行电源线 = EPS 自身 `CruiseActivated`（0x318 bit1）**：该位 =0 时 EPS **拒绝执行 LKA**——0x316 无论发得多标准（Config=3 + Lane 2/2 + ReqPrepare + Active 全套），MainTorque 恒 0，Prepared 照常置 1 但不出力（根因 16，route 0000000a 四个死会话逐帧实证）。厂商日志同证：route 7--12e 的 3119 个 c=0 帧出力率 **0.0%**，c=1 时 53.7%/96.3%；厂商解密状态机即以该位为轴（`is_steering_activated = LKSPrepare & Cruise_Activated`、`is_steering_need_activate = LKSPrepare & !Cruise_Activated`）。**启示：c=0 时武装会话 = 开环死会话**，demand 会无反馈地 windup 到满幅，等 c 翻 1 的瞬间全部甩给 EPS（0000000a t=76.3：积压 demand 一帧内 mt=-285）。
 
-## 四、会话生命周期（厂商编排，route 00000037 逐帧实测）
+## 四、会话生命周期（厂商编排，route 00000037 逐帧实测；我们已重写为同一架构，2c28a0cd09）
 
-| 阶段 | 厂商行为 | 我们的行为 |
+**总前提（规则 10）：全部阶段都以 EPS 侧 `CruiseActivated=1` 为电源线**——c=0 时我们只发怠速姿态，不 burst、不武装、不重连；c 翻 1 时全新武装，不携带任何跨越门限的积压 demand（根因 16）。
+
+| 阶段 | 厂商行为 | 我们的行为（现架构） |
 |---|---|---|
-| 怠速 | 不发 ReqPrepare；帧 `(State=1, MPC=0, Config=3, Active=0, Lane 0/0)` | echo 相机 Config（1/2）+ Lane 0/0 + Out=0（6.23 改定——正是原车相机不转向时的真实状态） |
-| 进场 | engage 时 3 帧短促 prepare（60ms）→ EPS 50ms 应答 → 立即 Act=1 | 持续发 ReqPrepare 直到 Prepared（已验证可用，`3021ffb`） |
-| 激活 | 扭矩 0.24s 内 0→107（~445/s ≈ 9/帧@50Hz）→ 稳态 101-113 | 软启动 10/帧（0.4s 到满 STEER_MAX=200），armed 需真实需求 ≥6 单位（根因 14） |
-| 稳态 | Config=3 + Act=1 + State=1 + Lane 2/2，**请求非零贯穿全程** | 同左 + 静默守卫 0.16s + 对向跟随（§6/§8） |
-| 退场 | Act=1 保持下斜坡 52→0（~80ms）再切 Act=0 | 同左（`f3926a3` 优雅退场）；TorqueFailed 时硬切 |
+| 怠速 | 不发 ReqPrepare；帧 `(State=1, MPC=0, Config=3, Active=0, Lane 0/0)` | 同左，无条件常开（含 c=0 时段；勿回退到"回显相机 Config"） |
+| 进场 | engage 时 3 帧短促 prepare（60ms）→ **不等 EPS 应答** 50ms 后立即 Act=1 | 同左（3 帧 ReqPrepare 突发 lanes 2/2 → 无条件 Act=1）；**武装另需手轻**（\|drv\|<50，根因 15/16） |
+| 激活 | 扭矩 0.24s 内 0→107（~9/帧@50Hz）→ 稳态 101-113 | 从 0 起步、DELTA 16/帧 限速爬升；对向时 driver-limit（ALLOWANCE=120）削幅——厂商 -153 vs +166 同款 |
+| 稳态 | Config=3 + Act=1 + State=1 + Lane 2/2，**请求非零贯穿全程**，与驾驶员正面对抗不退让 | 同左（满权限 STEER_MAX=300）；armed-零 0.42s 背停（21 帧）是唯一我方额外退场 |
+| 退场 | Act=1 保持下斜坡 52→0（~80ms）再切 Act=0 → **立即 re-burst 重连**（60-80ms，日志两次零投诉） | 同左；TF 硬切不复活；**SteerErrorCode≠0 退场后不重试**，等 EPS 清除且 c=1 |
+| 死会话（禁止） | 无此状态（其日志 c=0 时从不武装） | 旧架构曾武装 c=0 → 开环 windup ±300 → 现结构性禁止（根因 16） |
 
 ## 五、0x318 反馈语义（50Hz）
 
 | 字段 | 位定义 | 语义 |
 |---|---|---|
-| LKAS_Prepared | 0\|1 | 握手应答；会话退场后 ~0.2s 清除（单例观察：Rf_015） |
-| CruiseActivated | 1\|1 | |
-| **TorqueFailed** | 2\|1 | **锁存故障**：EPS 放弃全部转向输入，**直到点火循环**（route 0000001c/20/22 + yysnet 同注 "EPS give up all inputs until restart"）；OP 收到即硬切退让 + UI "LKAS Fault: Restart the car to engage" |
-| SteerWarning | 4\|1 | 见 §7 |
-| SteerErrorCode | 5\|3 | 锁存时非零（码表未逆向） |
-| **MainTorque** | 8\|12 有符号 | **= EPS 对收到指令的回显**（与 LKAS_Output 相关 0.98，差值 p50≈1）——不是实际助力，不能当反馈用（调试记录 6.12/6.18 定论） |
+| LKAS_Prepared | 0\|1 | 握手应答；**注意 Prepared=1 ≠ 会出力**——c=0 拒绝状态下照样置 1（根因 16），不能当执行判据 |
+| **CruiseActivated** | 1\|1 | **EPS 自己的 ACC 激活标志 = LKA 执行电源线（规则 10/根因 16）**。与 OP 的 cruiseState.enabled 不同步：EPS 置 1 有自己的节奏（0000000a：OP 侧 72.6s 已 enabled，EPS 76.3s 才置 1、100.65s 再次置 1），err=2 退场时立即清 0（78.29s）而 OP 侧 cruise 仍 True |
+| **TorqueFailed** | 2\|1 | **锁存故障**：EPS 放弃全部转向输入，**直到点火循环**（route 0000001c/20/22 + yysnet 同注 "EPS give up all inputs until restart"）；OP 收到即硬切退让 + UI "LKAS Fault: Restart the car to engage"（0000000a 实证：锁存后第二段全程 fault=True，重启车才清） |
+| SteerWarning | 4\|1 | 见 §7；err=2 预警时 warn 同步置 1（0000000a 三次 err=2 均 warn=1） |
+| SteerErrorCode | 5\|3 | **码表部分解码（0000000a + c9f1698c82）**：2 = ~0.5s 站下预警（可恢复，解除违规状态即清零，本日 3 次中 2 次自行恢复）；4 = 升级锁存，与 TorqueFailed 同帧出现（110.33s err=4+tf=1）→ 永久 LKAS Fault。1/3/5-7 未观测 |
+| **MainTorque** | 8\|12 有符号 | **执行侧扭矩，非无条件回显**——6.12/6.18 的"纯指令回显"结论被根因 16 推翻：c=0 拒绝窗口 demand -240 持续 4s 而 mt=0（回显说不成立）；执行时紧跟 LKAS_Output（相关 0.98，0000000a 实测 mt 略超 demand：-285 vs -240、+205 vs +198）。**mt==0 且 demand≠0 = "EPS 未执行"的可靠判据**（本次诊断即用它定位死会话）；是否等于电机实际出力仍存疑，但执行判据用途已定论 |
 | ReportHandsNotOnSteeringWheel | 21\|1 | |
 | SteerDriverTorque | 24\|12 有符号 | 驾驶员扭矩 raw 量程，见 §8 |
 | Counter / CheckSum | 52\|4 / 56\|8 | XOR 校验（开源 port 说法，未字节验证；我们只收不发） |
 
 ## 六、锁存规则（TorqueFailed；armed 会话 = Config=3 + LKAS_Active=1）
 
-第二次驾驶 6 处真锁存逐帧时序（`docs_site/hour_logs_2/latch_report.txt`）：
+第二次驾驶 6 处真锁存逐帧时序（`docs_site/hour_logs_2/latch_report.txt`，**旧架构时代**——触发状态（armed-零/对向让位）在现架构下已结构性消失，保留作 EPS 行为记录）：
 
 | 案例 | 不良状态开始 | SteerWarning | TorqueFailed | SW→锁存 |
 |---|---|---|---|---|
@@ -88,23 +92,29 @@ DBC：`opendbc_repo/opendbc/dbc/byd_general_pt.dbc`；固件侧安全模型：`o
 | R13_003（armed 时驾驶员持盘 stq 110~150） | armed-零 −0.64s | −0.50s | 0.00s | 0.50s |
 | R16_000（OP −70 vs 驾驶员 +46 对向） | 对向 ~−0.63s | −0.49s | 0.00s | 0.49s |
 
-**规则终版**：
+**新案例（根因 16，route 0000000a seg1，2026-09-29）——err=2 三击升级链**：
+同一行程内三次 `SteerErrorCode=2 + SteerWarning`（t=78.07/103.99/109.79，均 ~0.5s 后解除或升级）：
+前两次 EPS 自己退场（c 位清 0）→ 我方重连恢复；**第三次（取消 ACC + 60ms 内重 SET，驾驶员 +210 猛拉，我方 rail 的 +218 demand 仍在总线上）0.48s 后升级 `err=4 + TorqueFailed` 同帧出现 → 永久 LKAS Fault**。教训：err=2 时总线上残留的大幅值 demand（rail 后限速下坡要 0.33s+）是升级的催化剂——预防 = 不制造 rail（c 门），而非加快退场（固件 rate 18/帧 下坡是硬下限）。
+
+**规则终版（2026-09-29 改判后）**：
 
 | # | 触发条件 | 证据 | 现行防御 |
 |---|---|---|---|
-| R1 | **armed 会话请求 ≈0 持续 ~0.5s**（容忍度实测 ≤0.48s；一小时内 4 处 + 第二次驾驶 5 处） | 6.23、6.24；route 33 第 7 次锁存同属此类（armed+零+驾驶员剧烈操作） | 静默守卫 0.16s 退场 + engage 门（armed 需真实需求 ≥6 单位） |
-| R2 | **armed 会话请求与驾驶员输入对向**（幅度与 68 让位阈值无关：drv +21~46 即触发；root cause 12 的 87~138 同类） | R16_000、route 32/33 | 对向跟随（~0.06s 翻转为同向 ±20） |
-| R3 | 错标帧时代（Config=2/State=2）的合理性规则：\|转角\|>50° 后 ~10s、全锁速摆动 >150°/s、幅值 ~55+ | 路测 3-5；厂商 Config=3 下用到 193 且无门控也干净 → **已改判为错标帧规则**，保留为保守门控 | 角度门 40/30、速率门 180/40、大转角 10s 锁定 |
+| R1 | **armed 会话请求 ≈0 持续 ~0.5s**（容忍度实测 ≤0.48s；一小时内 4 处 + 第二次驾驶 5 处） | 6.23、6.24；route 33 第 7 次锁存同属此类 | armed-零 0.42s 背停（21 帧@50Hz 退场+burst 重连）+ 武装手轻门；旧静默守卫 0.16s/engage 门已删 |
+| R2 | ~~armed 会话请求与驾驶员对向~~ **改判（9-29 厂商实证）：对向本身不触发**——厂商 -153 vs +166 正面对抗零投诉；R16_000 真凶是旧让位逻辑制造的零请求/±20 振荡（会话犹豫，非对抗） | R16_000 重读 + route 00000037 对抗段 + 0000000a +284 vs -285 | **无防御 = 厂商语义**：正面出力不退让（对向跟随逻辑已删，勿复活） |
+| R3 | 错标帧时代（Config=2/State=2）的合理性规则：\|转角\|>50° 后 ~10s、全锁速摆动 >150°/s、幅值 ~55+ | 路测 3-5；厂商 Config=3 下用到 193 且无门控也干净 → 错标帧规则 | **角度/速率门已整体删除**（根因 6.30 的 100s 静默来源）；大弯/泊车靠 c 门 + 手轻门放行 |
 | R4 | 非会话类：断流（根因 1）、非法 Config 组合（二.5） | 调试记录 一/二 | 无条件 50Hz 发送 + Config 逻辑 |
+| R5 | **c=0 时武装（死会话）→ 开环 rail → c 翻 1 瞬间甩盘 → err=2 → 升级 err=4+TF** | 根因 16（route 0000000a 四死会话 + 三击链）；厂商日志 3119 帧 c=0 零出力 | **CruiseActivated 门 = 会话电源线**（c=0 纯怠速流、不 burst 不重连、c=1 全新武装）+ 武装手轻门 \|drv\|<50 |
 
-**恢复**：仅点火循环清除。锁存后每次 engage 只是向故障 EPS 重发 ReqPrepare、永不 armed——仪表症状为"绿框但方向盘零扭矩"。OP 侧 `TorqueFailed → steerFaultPermanent` 硬切 + UI 告警（`ddf29f8`）。
+**恢复**：仅点火循环清除（0000000a 第二段全程 fault=True 实证，重启车后第二 route 正常）。锁存后每次 engage 只是向故障 EPS 重发 ReqPrepare、永不 armed——仪表症状为"绿框但方向盘零扭矩"。OP 侧 `TorqueFailed → steerFaultPermanent` 硬切 + UI 告警（`ddf29f8`）。
 
 ## 七、SteerWarning（0x318 bit4）
 
-- 触发：armed 会话进入零请求后 **0~0.22s**（R10 的 SW 在归零前 0.02s——抓盘瞬间即触）；armed 对向 **~0.14s**（R16）；错标帧非法组合。
-- **不变量：SW → TorqueFailed 恒 ~0.50s（6/6，无一例外）**。尚未观察到 SW 出现后自行清除的案例 → 当前设计按"必须不让 SW 的触发条件成立"执行。
+- 触发：armed 会话进入零请求后 **0~0.22s**（R10 的 SW 在归零前 0.02s——抓盘瞬间即触）；错标帧非法组合；**err=2 预警与 SW 同步出现**（0000000a 三次 err=2 均 warn=1，t=78.07/103.99/109.79）。
+- **不变量：SW → TorqueFailed 恒 ~0.50s（6/6 + 0000000a 第三击 = 7/7，109.85→110.33 = 0.48s）**。
+- **SW 自行清除案例已获得（2026-09-29，2/2）**：0000000a 前两次 err=2/SW（78.07、103.99），EPS 自退场（c 位清 0）+ 我方停止请求后 ~0.3s 内全部清零、无锁存——"SW 持续 0.5s 才锁"假设获实证支持，退场可解；但**清除的前提是违规状态真的解除**（第三次 rail demand 残留 → 未及清除 → 升级）。
 - 会话退场（idle echo）后 SW=1 **不**进展为锁存：大量 disarmed 段 SW=1 长期存在、零锁存（实证）。
-- stock LKA 类比：手扶 → SW → 相机退出会话 → SW 清除 → 无锁存（推断，解释了原车 LKA 手扶即释放却从不锁存）。
+- stock LKA 类比：手扶 → SW → 相机退出会话 → SW 清除 → 无锁存（推断 + 上述 2 例支持，解释了原车 LKA 手扶即释放却从不锁存）。
 
 ## 八、驾驶员扭矩量程（SteerDriverTorque，raw ±2048）
 
@@ -112,51 +122,61 @@ DBC：`opendbc_repo/opendbc/dbc/byd_general_pt.dbc`；固件侧安全模型：`o
 |---|---|
 | 脱手噪声 | <50（峰值，振荡） |
 | 轻握 | 60-150 |
-| 用力/对抗 | >150，剧烈 200-240（第二次驾驶实测） |
+| 用力/对抗 | >150，剧烈 200-300（0000000a 实测峰值 +296，泊车对抗） |
 
 - `STEER_THRESHOLD=80`（steeringPressed，5 帧防抖）。
-- driver-limit 公式（lateral.py，ALLOWANCE=68×MULTIPLIER=3）**只限制对向且 \|drv\|>68 的请求**——对向 ≤68 完全不限，这正是 R16 的漏洞，现由对向跟随逻辑兜底；同向助力公式不削减（vendor 同向跟随也如此）。
+- driver-limit（现架构内置于控制器，ALLOWANCE=120）按厂商语义执行：对抗时仍正面出力（厂商 -153 vs +166），武装时刻（burst→active）要求 \|drv\|<50（根因 15/16）——**只门武装，不门会话内**。
 
 ## 九、出力标定（厂商 Config=3 实跑，route 00000037）
 
-| 参数 | 厂商实跑 | 我们 |
+| 参数 | 厂商实跑 | 我们（现架构） |
 |---|---|---|
-| 扭矩 | p50=67 / p90=128 / max=193 | STEER_MAX=200 |
-| 帧间步进 | p99≈16（其固件限 17） | DELTA 8/10（我们固件安全限 10/12，max 300 未动） |
-| 进场 ramp | ~9/帧（0.24s 到 107） | 软启动 10/帧（0.4s 到满） |
+| 扭矩 | p50=67 / p90=128 / max=193 | STEER_MAX=300（values.json 真值；实际幅值由 driver-limit 与横向环决定，回放包络 ≤193 同厂商） |
+| 帧间步进 | p99≈16（其固件限 17；我方固件实测限 18） | DELTA 16/16（厂商 p99 对齐） |
+| 进场 ramp | ~9/帧（0.24s 到 107） | 从 0 起步同 DELTA 16 限速（无独立软启动层，已删） |
 | steerRatio / mass | 19.5 / 1926 | 同（`84e2ae8`） |
 | 横向模型 | factor 2.5 / friction 0.10 / delay 0.3 | 同 |
 
-## 十、现行门控矩阵（代码 ↔ 规则）
+## 十、现行门控矩阵（2026-09-29 厂商会话架构重写后，代码 ↔ 规则）
+
+**现存的仅 5 项**（厂商语义 + 两个我方背停，再无防御塔）：
 
 | 门控 | 参数（values.py） | 防的规则 | 来源 |
 |---|---|---|---|
-| engage 门 | armed 需 \|需求\| ≥6 单位 | R1（对抗中 armed 零请求，4/6 案例） | 根因 14 |
-| 静默守卫 | 8 命令@50Hz（0.16s）\|请求\|<2 → 退场 | R1 | 根因 13→14 |
-| 对向跟随 | \|drv\|>15 持续 6 计数（~0.06s）→ 同向 ±20 | R2 | 根因 12→14 |
-| 角度/速率门 | 40°退让/30°重arm、180/40°/s、>50° 后 10s 锁定 | R3（保守层） | 路测 3-5 |
+| **CruiseActivated 门** | EPS 0x318 bit1（CS.eps_state_msg） | R5 死会话/rail/升级链 | 根因 16，`2c28a0cd09` |
+| **武装手轻门** | STEER_ARM_DRV_TORQUE=50（只门 burst→active，不门会话内） | R1 变体（cold-arm，Rf_015/R15/Re_014/R13） | 根因 15 回归，`2c28a0cd09` |
+| armed-零背停 | STEER_ZERO_EXIT_FRAMES=21（0.42s，实测锁存带 0.48-0.72s 内退场+burst 重连） | R1 | 根因 13/14 语义重写 |
 | 刹车抑制 | 3 帧按下/5 帧释放 | R1 变体 | — |
-| TorqueFailed 处理 | 硬切 + steerFaultPermanent 告警 | 恢复路径 | 路测 2 |
-| 无条件 50Hz 发送 | — | R4 断流 | 根因 1 |
-| 软启动 | 10/帧 | R1（复 armed 零窗口）+ 力度连续性 | 根因 14 |
+| TorqueFailed/err 处理 | TF 硬切不复活 + steerFaultPermanent 告警；err≠0 退场不重试 | 恢复路径 | 路测 2 + 根因 16 |
+
+**已删除（勿复活，全部有根因判决）**：静默守卫 0.16s（→0.42s 背停替代）、对向跟随（R2 改判：对抗合法，犹豫才是罪）、角度/速率门 + 大转角 10s 锁定（R3 错标帧规则 + 100s 静默来源）、角度 holdback（6.30 静默）、软启动（vendor ramp 即 DELTA 限速）、engage 需求 ≥6 门（并入手轻门语义）、让位曲线、follow 翻转。
+
+**固件侧（fw_base 0.9.x）**：allowance 120 / rate 18/18 / 0xf3 心跳 `controls_allowed=engaged`（mismatch 死锁修复，`0cfd780854`）；bit1 电源线是控制器层门，固件不改。
 
 ## 十一、未定论 / 调参旋钮
 
-1. **SW→锁存的确切机制**：是"SW 持续 0.5s"还是"SW 出现即无条件 0.5s 倒计时"——无清除案例。现按前者假设设计（退场可解）；若实车出现退场后仍锁存，改按后者（必须避免 SW 触发）。
-2. **对向跟随参数**（15 单位 / 6 计数 / ±20 跟随幅值）是工程判断值，非厂商实测——出现助力晃动或残留锁存时首先调这里。
-3. SteerErrorCode（0x318 bit5-7）码表未逆向。
-4. 角度/速率门（R3）在 Config=3 时代可能可放宽或移除（厂商无门控也干净）——保留为保守层，弯道若仍受限再评估。
-5. LKAS_Prepared 退场后 ~0.2s 清除为单例观察。
-6. armed-零容忍度实测区间 0.48~0.72s，EPS 内部阈值未知（方差暗示与 SW 时刻/驾驶员活动相关）。
+1. **SW→锁存机制（部分定论，9-29）**：2 个清除案例（0000000a 前两次 err=2）支持"SW 持续 ~0.5s 才锁"；第三击表明**违规状态未真解除则清除无效**。残余问题：清除判定的确切边界（总线上残留 demand 算不算违规）——err=2 时立即零请求是否够，待实车复验。
+2. ~~对向跟随参数~~ **已 moot**：逻辑整体删除（R2 改判）。
+3. SteerErrorCode 码表：2=可恢复预警、4=升级锁存（与 TF 同帧）；1/3/5-7 未观测。
+4. ~~角度/速率门放宽~~ **已 moot**：整体删除。
+5. LKAS_Prepared 退场后 ~0.2s 清除为单例观察；**c=0 拒绝状态下 Prepared 照常置 1**（根因 16）——Prepared 语义比原理解更宽。
+6. armed-零容忍度实测区间 0.48~0.72s，EPS 内部阈值未知。
+7. **c=1 但 EPS 延迟出力**（0000000a：100.65s 置 c=1，103.07s 才开始执行，中间 2.4s mt=0）——触发条件未知（radar ACC 实际控车？司机手轻？）。**未加"拒绝守卫"**：强行 0.5s 退场会误杀该合法窗口；先观察实车。
+8. MainTorque 是否等于电机实际出力（执行判据用途已定论，物理量纲存疑——mt 曾超 demand：-285 vs -240）。
+9. 厂商 demand 包络 max=193 但 STEER_MAX=300：300 是 EPS 绝对限还是厂商从未用满，未定论（我方沿用 300 + driver-limit 削幅）。
 
 ## 十二、工具与证据索引
 
 | 内容 | 位置 |
 |---|---|
 | 第二次驾驶 6 锁存逐帧重建 | `docs_site/hour_logs_2/analyze_latch.py` → `latch_report.txt`（本地，gitignore） |
-| 修复回归（6 时间线灌回控制器） | `docs_site/hour_logs_2/replay_latches.py`（9/9 干净） |
+| 修复回归（锁存时间线灌回控制器） | `docs_site/hour_logs_2/replay_latches.py`（**14/14 干净**，含 c 门/手轻门场景） |
+| 真实 route 回放（灌新控制器查 armed-silence/flips） | `docs_site/hour_logs_2/replay_routes_new.py`（c9f1698c82 / 909633d7ed / 0000000a 全 CLEAN） |
+| 0000000a 帧级分析脚本 | `/tmp/byd_0a/analyze*.py`（临时，重拉：rlog 在设备 realdata） |
+| 厂商 c 位-出力相关性验证 | `/tmp/byd_0a/vendor_check.py` + `docs_site/op_byd_logs/`（route 7--12e：c=0 零出力） |
 | 厂商系统工作日志（字节模板来源） | `docs_site/op_byd_logs/`（含 vendor_diff.py） |
-| 调试全史（根因 1-14） | `byd-song-plus-lkas-debug.md` |
+| 调试全史（根因 1-14） | `byd-song-plus-lkas-debug.md`（15/16 见 `byd-current-status.md`） |
+| 当前状态快照 | `byd-current-status.md` |
 | 部署/测试规程 | `byd-song-plus-ops.md`（测试规程 = 调试记录 6.22） |
 
-根因速查：1 断流 / 2 SETME / 3 UDS 查询帧 / 4 controlsMismatch 容忍 / 5 按键 0x3B0 / 6 DMS / 7 安全带 / 8 AccState 双义 / 9 扭矩量程 300 / 10 LKAS_State / 11 Config=3 会话 / 12 对抗性助力 / 13 armed-零静默 / 14 守卫输掉比赛 + 对向残余。
+根因速查：1 断流 / 2 SETME / 3 UDS 查询帧 / 4 controlsMismatch 容忍 / 5 按键 0x3B0 / 6 DMS / 7 安全带 / 8 AccState 双义 / 9 扭矩量程 300 / 10 LKAS_State / 11 Config=3 会话 / 12 对抗性助力 / 13 armed-零静默 / 14 守卫输掉比赛 + 对向残余 / 15 冷武装（角度门重开撞持盘，`d9eec5070e`）/ **16 CruiseActivated 电源线（c=0 死会话 → rail → 三击升级 TF，`2c28a0cd09`）**。
