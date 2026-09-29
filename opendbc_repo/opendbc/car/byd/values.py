@@ -55,6 +55,12 @@ class CarControllerParams:
   # armed at zero because its demand loop is always steering): our measured
   # 0.48-0.72 s armed-zero latch band, exit to the retry burst before it.
   STEER_ZERO_EXIT_FRAMES = 21  # 50 Hz commands: ~0.42 s armed at |request| < 2 -> exit + re-burst
+  # Engage-moment discipline (root cause 15, route 909633d7ed): the vendor's
+  # engages all land at hands-light moments, and arming a session against a
+  # held wheel walks straight into the EPS err=2/4 escalation. Gate only the
+  # ARM (burst -> active), never the in-session fight (the vendor outputs
+  # -153 against a +166 driver yank).
+  STEER_ARM_DRV_TORQUE = 50
   # The vendor streams Config=3 in EVERY session state - idle included
   # (route 00000037: 16 s of Cfg=3/Act=0/lanes 0/0 standby at boot, and
   # between every session). Lanes 0/0 make it standby, not an armed-silent
