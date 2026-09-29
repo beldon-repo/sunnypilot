@@ -43,7 +43,7 @@ DBC：`opendbc_repo/opendbc/dbc/byd_general_pt.dbc`；固件侧安全模型：`o
 
 1. SETME_*/MPC_State 等回显字段不可缺省——从零构造 = 非法帧 → ADAS 域故障"check multifunction video controller"（根因 2，`1432de9`）。
 2. 校验算法 0xAF 已对拍验证（调试记录 二.2）。
-3. 握手三步：`ReqPrepare=1` → EPS 置 `LKAS_Prepared`（0x318 bit0，实测 38-50ms 应答）→ 之后才接受 `LKAS_Active=1`；**跳过第一步 EPS 永不 armed**（调试记录 二.3）。
+3. 握手时序：`ReqPrepare=1` → EPS 置 `LKAS_Prepared`（0x318 bit0，实测 38-50ms 应答）；**ReqPrepare 必须先于 Active**（调试记录 二.3：完全没有 prepare 请求则 EPS 永不 armed），但**不必等 Prepared 应答再发 Active**——厂商 3 帧 burst 后 50ms 无条件 Act=1（route 00000037 帧级实证），且**厂商全程 EPS `LKAS_Prepared=0` 依然出力**。Prepared 不是出力前提，其置位/清除语义见 §5/§11.5（c=0 拒绝状态下它照样置 1）。
 4. LaneState 必须 =2，否则 EPS 不执行 LKA（调试记录 二.4）。
 5. Config 组合合法性：`Config=1(ALARM)+LaneState=2` 是非法组合 → EPS 锁 SteerWarning、拒绝 armed；请求 LKA 时 Config=2（调试记录 二.5）。
 6. **50Hz 连续流不可断**——断流 → SteerWarning 锁存 → 拒绝 armed → MPC 报"视频控制器"（根因 1，`8496a71` 无条件发送）。
@@ -69,7 +69,7 @@ DBC：`opendbc_repo/opendbc/dbc/byd_general_pt.dbc`；固件侧安全模型：`o
 
 | 字段 | 位定义 | 语义 |
 |---|---|---|
-| LKAS_Prepared | 0\|1 | 握手应答；**注意 Prepared=1 ≠ 会出力**——c=0 拒绝状态下照样置 1（根因 16），不能当执行判据 |
+| LKAS_Prepared | 0\|1 | 握手应答；**注意 Prepared=1 ≠ 会出力**——c=0 拒绝状态下照样置 1（根因 16），不能当执行判据；厂商 route 00000037 更是全程 Prepared=0 仍正常出力——置位条件在两车/两时观测不一致（我们频繁置 1），语义待深挖（§11.5） |
 | **CruiseActivated** | 1\|1 | **EPS 自己的 ACC 激活标志 = LKA 执行电源线（规则 10/根因 16）**。与 OP 的 cruiseState.enabled 不同步：EPS 置 1 有自己的节奏（0000000a：OP 侧 72.6s 已 enabled，EPS 76.3s 才置 1、100.65s 再次置 1），err=2 退场时立即清 0（78.29s）而 OP 侧 cruise 仍 True |
 | **TorqueFailed** | 2\|1 | **锁存故障**：EPS 放弃全部转向输入，**直到点火循环**（route 0000001c/20/22 + yysnet 同注 "EPS give up all inputs until restart"）；OP 收到即硬切退让 + UI "LKAS Fault: Restart the car to engage"（0000000a 实证：锁存后第二段全程 fault=True，重启车才清） |
 | SteerWarning | 4\|1 | 见 §7；err=2 预警时 warn 同步置 1（0000000a 三次 err=2 均 warn=1） |
@@ -159,7 +159,7 @@ DBC：`opendbc_repo/opendbc/dbc/byd_general_pt.dbc`；固件侧安全模型：`o
 2. ~~对向跟随参数~~ **已 moot**：逻辑整体删除（R2 改判）。
 3. SteerErrorCode 码表：2=可恢复预警、4=升级锁存（与 TF 同帧）；1/3/5-7 未观测。
 4. ~~角度/速率门放宽~~ **已 moot**：整体删除。
-5. LKAS_Prepared 退场后 ~0.2s 清除为单例观察；**c=0 拒绝状态下 Prepared 照常置 1**（根因 16）——Prepared 语义比原理解更宽。
+5. **LKAS_Prepared 语义（9-29 升级为独立疑点）**：三个互斥观测——①调试记录 二.3 时代"无 prepare 请求则永不 armed"（预备握手必要性成立）；②厂商 00000037 全程 Prepared=0 仍出力（应答非出力前提）；③我方 0000000a EPS 频繁置 1 且 c=0 拒绝时照样置 1（置位门槛极低）。综合：Prepared 只是"收到过 ReqPrepare"的应答位，与执行链路（§规则 10 的 c 位）完全解耦；退场后 ~0.2s 清除为单例观察。**勿把 Prepared 当任何门控输入**（现行代码未用，保持）。
 6. armed-零容忍度实测区间 0.48~0.72s，EPS 内部阈值未知。
 7. **c=1 但 EPS 延迟出力**（0000000a：100.65s 置 c=1，103.07s 才开始执行，中间 2.4s mt=0）——触发条件未知（radar ACC 实际控车？司机手轻？）。**未加"拒绝守卫"**：强行 0.5s 退场会误杀该合法窗口；先观察实车。
 8. MainTorque 是否等于电机实际出力（执行判据用途已定论，物理量纲存疑——mt 曾超 demand：-285 vs -240）。
