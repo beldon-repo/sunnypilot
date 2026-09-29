@@ -496,3 +496,23 @@ op_byd 工作日志（route 37）的 carParams 与实时流量给出了完整标
 3. `replay_latches.py` 新增 `r909633-coldarm`（armed=no，9 号时间线灌回不武装）+ `r909633-release`（松手后正常武装）；heavy-fight/Rf_015-heavy/Rf_015-2nd 改为手轻起步的 in-session 变体，**15/15 干净**
 
 **验证**：car byd 接口测试过；回放 15/15。**待实车**：按 6.22 规程，重点复测泊车挪车后立刻上路的第一段（原锁存场景）。
+
+### 6.27 根因 16（2026-09-29，route c9f1698c82）：EPS 的 err=2 降级警告被无视——振荡会话拖到 err=4 锁存
+
+**症状**：根因 15 修复（d9eec5070e）部署后首驾，39 km/h 近直道再报 "LKAS Fault"（第 10 次锁存）。武装门工作正常（53.2s 手轻 -28 时合法武装）。
+
+**帧级重建（seg 0）**：
+- 53.217-53.257：手轻（drv -22）+ 需求 -22 → prepare 突发 → 53.26 EPS ack → **合法武装**（本次全部条件满足，根因 15 门不拦）
+- 53.3-57.0：**armed 会话 3.5 秒**，但请求流病态：驾驶员 ±100 锯齿握放，横向环追着积分——TX 输出 ±20（follow 截幅）↔ ±60（驾驶员松手瞬间按饱和 demand 冲出）反复换向，controlsState demand 在 ±130 摆动并在 56.8-57.2 **饱和到 +1.009（满量程 ±200）**
+- 56.857：**EPS `SteerErrorCode` 0→2**（降级警告，给 ~500ms 窗口），期间还脉冲了两次 LKAS_Prepared
+- 57.358：**err 2→4 + SteerWarning + TorqueFailed 锁存**——此时请求是最温和的稳态 -20 跟随，但 EPS 已经对 3.5s 的振荡/饱和流失去耐心
+
+**根因**：EPS 的错误码是我们从未读过的信号。厂商控制器端到端都是 EPS 状态机驱动（need_activate/standby/lose_frame），而 err=2 就是 EPS 的"请你退场"请求——我们 armed 会话对其无感知，继续输出，500ms 后被强制锁存。附带发现：横向环在驾驶员持盘对抗下会积分到饱和（厂商 1854 激活帧零饱和），锯齿请求流是诱因，err 守卫是兜底。
+
+**修复（CS.steer_error 守卫，厂商对齐）**：
+1. carstate 暴露 `SteerErrorCode`
+2. controller：`lat_active` 加 `not CS.steer_error`——err≠0 走与刹车抑制相同的斜坡退场路径（DELTA_DOWN 限速），armed 会话退场、prepare/arm 全停；EPS 清 err 后自然恢复
+3. 实测时间线：err=2 @56.857 → 请求归零 ~2 帧内（-20 幅度）→ EPS 窗口内干净退场，不升级
+4. replay 新增 `err2-standdown`（饱和 demand 下 err=2 退场/不复武装/清零后恢复），**16/16 干净**；car byd 接口测试过
+
+**遗留（下一步）**：横向环在驾驶员持盘时的饱和/振荡未根治（NNLC=1 在跑、权重未路测标定）——err 守卫把最坏后果从"熄火前横向全废"降级为"提前优雅退场"，但手感/稳定性待路测数据定位（先查 NN 前馈 vs 反馈项占比）。

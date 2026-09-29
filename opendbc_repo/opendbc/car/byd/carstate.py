@@ -13,6 +13,7 @@ class CarState(CarStateBase):
 
     self.lkas_prepared = False
     self.torque_failed = False
+    self.steer_error = 0
     self.res_btn_pressed = False
     self.counter_pcm_buttons = 0
     self.eps_state_msg = {}
@@ -35,6 +36,11 @@ class CarState(CarStateBase):
     # EPS feedback (also read back by the ADAS domain)
     self.lkas_prepared = bool(cp.vl["ACC_EPS_STATE"]["LKAS_Prepared"])
     self.torque_failed = bool(cp.vl["ACC_EPS_STATE"]["TorqueFailed"])
+    # EPS's own warning level: observed 0 while idle and in clean sessions,
+    # 2 as a ~0.5 s stand-down warning before it escalates to 4 + SteerWarning
+    # + TorqueFailed (route c9f1698c82 seg 0). The controller obeys it like
+    # the vendor obeys the EPS state bits.
+    self.steer_error = int(cp.vl["ACC_EPS_STATE"]["SteerErrorCode"])
     self.eps_state_msg = cp.vl["ACC_EPS_STATE"]
 
     # stock camera's ACC_MPC_STATE (bus 2); the controller echoes this frame

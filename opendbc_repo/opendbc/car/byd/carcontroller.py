@@ -88,8 +88,18 @@ class CarController(CarControllerBase):
     elif not (ang < CarControllerParams.STEER_ANGLE_GATE_REARM and rate < CarControllerParams.STEER_RATE_REARM):
       self.angle_settle_counter = 0
 
+    # EPS warning escalation guard (route c9f1698c82 seg 0, 10th latch): an
+    # armed session chasing an oscillating demand (driver sawing +-100 raw
+    # while the controller saturated to +-full scale) made the EPS raise
+    # SteerErrorCode=2 as a ~0.5 s stand-down warning, then escalate to 4 +
+    # SteerWarning + TorqueFailed - lateral dead until ignition-off. The
+    # vendor controller is EPS-state-driven end to end (need_activate /
+    # standby / lose_frame on the 0x11F bits); err=2 is the EPS's stand-down
+    # request, so obey it: take the same ramp-out path as brake-inhibit and
+    # stand still until the EPS clears the error. On the real timeline this
+    # exits ~0.4 s before the escalation, cleanly and repeatably.
     lat_active = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill \
-      and not self.angle_gate
+      and not self.angle_gate and not CS.steer_error
 
     # A latched EPS TorqueFailed (real drive, route 0000001c seg 0: fault fired
     # ~0.7 s into the torque ramp while the driver resisted, then stayed
