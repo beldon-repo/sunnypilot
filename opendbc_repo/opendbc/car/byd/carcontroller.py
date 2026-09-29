@@ -112,7 +112,13 @@ class CarController(CarControllerBase):
       # / MADS re-engage while the driver held the wheel) and sat at zero
       # request until the EPS raised SteerWarning and latched. No demand, no
       # session: the idle echo below is the camera's own standby state.
-      if abs(CC.actuators.torque) > 0.03:
+      # Arming additionally requires hands-light (STEER_ARM_DRV_TORQUE): the
+      # angle gate's lockout can expire mid-maneuver while the driver still
+      # holds the wheel (route 909633d7ed seg 5 - gate reopened at angle 10
+      # deg/rate 0 with the driver at +83..126, armed into a +151..170 yank,
+      # latched). The vendor arms EPS-state-driven, hands-light only.
+      if abs(CC.actuators.torque) > 0.03 and \
+          abs(CS.out.steeringTorque) < CarControllerParams.STEER_ARM_DRV_TORQUE:
         if CS.lkas_prepared:
           self.lkas_active = True
           self.steer_softstart_limit = 0
@@ -211,8 +217,12 @@ class CarController(CarControllerBase):
     else:
       self.apply_torque_last = 0
       self.silence_counter = 0
-      if lat_active and not CS.lkas_prepared and not CS.torque_failed:
-        # ask the EPS to arm LKA; it responds with LKAS_Prepared in ACC_EPS_STATE
+      if lat_active and not CS.lkas_prepared and not CS.torque_failed \
+          and abs(CS.out.steeringTorque) < CarControllerParams.STEER_ARM_DRV_TORQUE:
+        # ask the EPS to arm LKA; it responds with LKAS_Prepared in ACC_EPS_STATE.
+        # Same hands-light gate as the arm: the EPS acks Prepared even with the
+        # driver gripping hard (it did at +73, route 909633d7ed seg 5), so
+        # requesting prepare mid-fight only builds a session waiting to latch.
         lkas_req_prepare = 1
 
     # 50 Hz; echo the stock camera's ACC_MPC_STATE so the SETME_* / MPC_State

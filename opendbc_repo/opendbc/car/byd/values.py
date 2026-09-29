@@ -64,6 +64,21 @@ class CarControllerParams:
   # 186 keeps the curve zero co-located with that clip zero.
   STEER_YIELD_DRV_BP = [50., 120., 186.]
   STEER_YIELD_FACTOR = [1.0, 0.5, 0.0]
+  # Arming gate (route 909633d7ed seg 5, 9th latch): the angle gate reopened
+  # mid-maneuver (angle 10 deg, rate 0-4 deg/s - all its conditions met) while
+  # the driver held the wheel at +83..126 raw torque, the session armed cold
+  # into a building driver yank (+151..170 by the time the softstart ramp
+  # reached +61) and the EPS latched SteerWarning 0.2 s in / TorqueFailed
+  # 0.7 s in - lateral dead for the whole drive (ignition-off reset). The
+  # angle/rate gates measure the WHEEL, not the driver; the vendor never arms
+  # like this: its session start is EPS-state-driven (is_steering_need_activate
+  # on the 0x11F LKSPrepare/Cruise_Activated pair, decrypted op_byd) and all
+  # its observed engages are hands-light at driving speed. Gate the prepare
+  # request and the arm on that same hands-light condition, taken at the yield
+  # curve's grip-onset breakpoint: below 50 the vendor still applies full
+  # assist, so the driver is not really holding the wheel. In-session fights
+  # stay with the yield curve / follow machinery (vendor behavior).
+  STEER_ARM_DRV_TORQUE = 50   # raw EPS driver torque; no ReqPrepare / arm above this
   # EPS LKAS fault gates, all measured on mis-marked frames (before the
   # Config=3 session fix). They never fired in the vendor's clean steering
   # (which has no such gates), so these are extra conservatism on top of the

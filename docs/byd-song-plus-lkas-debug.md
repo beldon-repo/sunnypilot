@@ -475,3 +475,24 @@ op_byd 工作日志（route 37）的 carParams 与实时流量给出了完整标
 验证：修复后 **13/13 场景干净**——原 9 场景保持（R16 对向暴露 0.16→0.10s），重对抗 armed-零 ≤0.04s 且 follow 正常 ±20 同向，刹车/角度门均斜坡退场。顺带修正：softstart 实际斜坡受 DELTA_UP=8 限为 ~0.5s（非 0.4s）；`drv != 0` 死守卫已删；ops.md 的 13 根因时代规则（>2s 静默、|drv|>68 让位）已同步到根因 14 规则。
 
 **遗留观察（路测盯）**：①`STEER_DRIVER_OPPOSING=15` 在脱手噪声带（<50）内，粗糙路面脱手时 follow 可能随噪声反复触发——请求从车道需求跌到 ±20 随噪声摆向，⑤"弯道跑出车道"可能换形式复发；若复现，激活改连续对向帧计数 + 释放加迟滞（阈值本身有 R16 drv 18-46 支撑，勿调高）。②静默退场→re-arm 的 Config 3↔idle 节律（缓弯 ~1Hz）未对 ADAS 域验证；re-arm 走直接还是 prepare 突发取决于 EPS 是否撤 LKAS_Prepared，路测日志确认。
+
+### 6.26 根因 15（2026-09-29，route 909633d7ed）：角度门重开的"冷武装"——门只看车轮不看驾驶员
+
+**症状**：正常行驶中报 "LKAS Fault: Restart the car to engage"（第 9 次 TorqueFailed 锁存），且 OP 侧全程零异常请求——与前 8 次根因形态完全不同。
+
+**帧级重建（route 909633d7ed seg 5，泊车/挪车场景）**：
+- t≈413-417：驾驶员打死方向盘挪车（角度最大 -235°），OP 保持 MADS engaged（CC.latActive=1），角度门关闭 + 10s 锁定开始计时
+- t=424.37：ACC 断开（vEgo 4.7），426.17 重新接合（无 0x3b0 按键帧——非我方 auto-resume）
+- t≈426.4：**角度门重开**（angle 10.2°、rate 0-4°/s，重武装条件全部满足，10s 锁定到期）——**但驾驶员扭矩 +83~126，还死死抓着方向盘**
+- t=426.689：我方 prepare 短促请求（`c2810008...`，6.20 编排）；426.71 EPS 应答 LKAS_Prepared=1（**EPS 在 +73 扭矩下照样 ack**）
+- t=426.727 起：armed 帧（Config=3/Act=1/lanes 2/2），LKAS_Output softstart 爬升 0→8→16→…→61——模型需求与驾驶员同向（都在向右），让位曲线只压到 ~+61
+- t=426.93：SteerWarning=1（armed 后 ~0.2s）；t=427.43：**TorqueFailed=1 锁存**（armed 后 ~0.7s），驾驶员扭矩 +151→+170
+
+**根因**：角度门/速率门全部测量**车轮**状态，不测量**驾驶员**。10s 锁定专为"大角度后 EPS 拒绝请求"设计，但到期重开恰好发生在驾驶员仍在持盘时，而 arm 判定只看模型需求（|CC.actuators.torque|>6）——armed 会话带着 +61 出力冲进 +151 的驾驶员猛拉，EPS 对 armed 上下文下的剧烈人机输入直接锁存（与根因 13 第 7 次锁存"OP 零扭矩也锁"同族，这次是 armed+同向大出力）。厂商不会这样：解密代码的武装是 **EPS 状态机驱动**（`is_steering_need_activate` = 0x11F LKSPrepare + not Cruise_Activated），且全部观察到的 engage 都发生在正常车速、手轻时机；armed 中的对抗才由让位曲线/同向跟随接管。
+
+**修复（STEER_ARM_DRV_TORQUE=50，武装/准备需"手轻"）**：
+1. ReqPrepare 与 arm 均加 `abs(CS.out.steeringTorque) < 50` 门——取厂商让位曲线的手感起点（drv<50 厂商仍给全量助力 = 驾驶员实质未持盘）。426.4 时 drv≥83 → 不准备、不武装 → 无锁存；驾驶员松手后正常上车流程不受影响
+2. in-session 对抗行为（让位曲线/对向探测/同向跟随）不动——厂商语义
+3. `replay_latches.py` 新增 `r909633-coldarm`（armed=no，9 号时间线灌回不武装）+ `r909633-release`（松手后正常武装）；heavy-fight/Rf_015-heavy/Rf_015-2nd 改为手轻起步的 in-session 变体，**15/15 干净**
+
+**验证**：car byd 接口测试过；回放 15/15。**待实车**：按 6.22 规程，重点复测泊车挪车后立刻上路的第一段（原锁存场景）。
