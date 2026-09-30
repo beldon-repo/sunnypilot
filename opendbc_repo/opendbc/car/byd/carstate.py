@@ -31,6 +31,10 @@ class CarState(CarStateBase):
     self.shifter_values = can_define.dv["DRIVE_STATE"]["Gear"]
 
     self.lkas_prepared = False
+    # EPS session-phase bit ("executing now") - read by the controller's c0
+    # guard (root cause 17 B): Active=1 that never gets accepted is a dead
+    # stream, not a session to keep storming at
+    self.cruise_activated = False
     self.torque_failed = False
     self.steer_error = 0
     self.res_btn_pressed = False
@@ -62,6 +66,7 @@ class CarState(CarStateBase):
 
     # EPS feedback (also read back by the ADAS domain)
     self.lkas_prepared = bool(cp.vl["ACC_EPS_STATE"]["LKAS_Prepared"])
+    self.cruise_activated = bool(cp.vl["ACC_EPS_STATE"]["CruiseActivated"])
     self.torque_failed = bool(cp.vl["ACC_EPS_STATE"]["TorqueFailed"])
     # EPS's own warning level: observed 0 while idle and in clean sessions,
     # 2 as a ~0.5 s stand-down warning before it escalates to 4 + SteerWarning

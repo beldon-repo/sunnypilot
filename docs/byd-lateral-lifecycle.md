@@ -146,13 +146,27 @@ req 与司机多同向）均无 err。**锁存风险窗口 = 低速 EPS 未接�
 hold 被 hold-末端边沿吸收 ✓）。"没跟着激活"的真实成分=**15s BOOT_LATCH_HOLD 固有延迟**
 （+1f 前 10s ACC main 实际是关的），机制本身无 bug。
 
-### 4. 待拍板（本段未动任何行为代码）
-低速对抗保护层，三选一/可组合：
-- **A. 出力让位**（非武装门）：|drv|>~140 且 req 与 drv 对向 → allow=False 收 0（厂商=
-  司机手力大时 EPS 自动退让，本 port 低速对向硬顶是唯一造出厂商不可有状态的路径）；
-- **B. c=0 超时 stand-down**：Active=1 且 CruiseActivated=0 持续 >N 秒 → 收 0 撤 Active，
-  等 EPS 接受再出全量；
-- **C. 低速限幅**：v<~25km/h 时 |req| 上限减半（EPS 反正不执行，只积累锁存风险）。
+### 4. 拍板结果 = A+B 组合，已落码（本分支，见下一节）
+
+### 五A(补)、低速对抗守卫 A+B 落码（根因 17）
+`carcontroller._update_torque_lateral` 两道新守卫 + `carstate.cruise_activated` 透传 +
+values 四参数（`STEER_YIELD_OPPOSING_TORQUE=140`/`STEER_YIELD_DRV_RELEASE=90`/
+`STEER_C0_WAIT_FRAMES=450`/`STEER_C0_RETRY_HOLD_FRAMES=300`）：
+- **A. 对向让位（仅 c=0 时段！）**：EPS 未接受会话（`CruiseActivated=0`）且
+  `demand*drv<0 and |drv|>140` 持续 0.1s（防 demand 正常翻向误触发）→ `allow=False`
+  走既有斜坡退场；迟滞出=手力<90 / demand 转同向 / **c 翻 1**（EPS 接手即解除）。
+  **c=1 会话内不守卫**：厂商满权限对抗（-153 vs +166 @c=1）是合法状态，若在那让位
+  = 重造 13b51bb5c4 删掉的"对抗中 armed-零"锁存类。
+- **B. 死会话超时**：Active=1 且 c=0 累计 9s（vendor 等待上限 2.86s，我们实测合法
+  等待 clean 4.1s/邻 bounce 7.7s → 阈值取 9s 不误伤）→ 斜坡撤 Active + 重试 burst
+  压 6s（c 提前翻 1 立即解禁）。c=0 期间 mt=0 本零出力，退场不损失任何助力，只把
+  1f 的 45s 满幅流切成有界占空比。
+验证：replay_latches 场景 15–18（1f 复现=c=0 对向 150ms 内缴械且不再武装；c=1 满权限
+对抗不受扰；c=0 10s 超时退场；2.4s 正常等待不误触发）**18/18**；carstate 7 passed；
+接口 BYD 1 passed（本机 params_pyx 为 ARM .so，用 /tmp/stub_params.py 插件打桩跑 host）。
+纯 OP 侧改动，固件不动。**路测观察项**：①低速对抗时段的退让观感（预期=司机接管方向、
+松手即回）②c=0 超时退场在起步等待期的误伤频率（9s 线）③err=2 频率（守卫的升级链应
+只出现在守卫反应前）。
 
 ## 七、已知取舍
 

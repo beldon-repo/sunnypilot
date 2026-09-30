@@ -64,6 +64,20 @@ class CarControllerParams:
   # HIGH error=200. STEER_MAX=300 stays the EPS absolute limit for the
   # firmware; the controller never emits past this envelope.
   STEER_MAX_REQUEST = 200
+  # Low-speed fight guards A+B (root cause 17, route 1f 2026-09-30, doc
+  # byd-lateral-lifecycle §七B): the only post-gate-removal latch was a
+  # sustained Active=1 ±200 flip storm while the EPS had NOT accepted the
+  # session (c=0, mt=0) against a driver holding 120-229 in the opposing
+  # direction. The vendor's opposing full authority (-153 vs +166) lived in
+  # a c=1 session; a c=0 armed stream fighting a heavy hand is a state it
+  # never produced.
+  STEER_YIELD_OPPOSING_TORQUE = 140  # yield output when |drv| past this AND demand opposes drv
+  STEER_YIELD_DRV_RELEASE = 90       # hysteresis exit: below this, or demand swings same-direction
+  STEER_C0_WAIT_FRAMES = 450         # 50 Hz: 9 s at Active=1 with c=0 -> stand down. Vendor wait max
+  # 2.86 s (7--12e), our OBSERVED legit waits run to 4.1 s clean / 7.7 s next to an ACC bounce
+  # (v2 road test) - 9 s stays clear of every healthy wait while capping the 1f-class stream
+  # (45 s) into bounded duty cycles.
+  STEER_C0_RETRY_HOLD_FRAMES = 300   # 50 Hz: hold the retry burst 6 s after a c0 stand-down (or until c rises)
   # The vendor streams Config=3 in EVERY session state - idle included
   # (route 00000037: 16 s of Cfg=3/Act=0/lanes 0/0 standby at boot, and
   # between every session). Lanes 0/0 make it standby, not an armed-silent

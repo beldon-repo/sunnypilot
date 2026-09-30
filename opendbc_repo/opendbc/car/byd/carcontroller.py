@@ -33,6 +33,11 @@ class CarController(CarControllerBase):
     self.brake_release_counter = 0
     self.retry_burst = 0      # remaining ReqPrepare frames of the engage/retry burst
     self.silence_counter = 0  # armed |request|~0 backstop
+    # low-speed fight guards A+B (root cause 17, values.py)
+    self.conflict = False     # A: latched while our demand opposes a heavy hand
+    self.conflict_frames = 0  # entry debounce (a momentary demand flip must not flap it)
+    self.c0_frames = 0        # B: frames of Active=1 with EPS CruiseActivated=0
+    self.c0_hold_frames = 0   # B: re-arm hold after a c0 stand-down
 
     # SNG auto-resume state
     self.is_sng_check = False
@@ -101,6 +106,51 @@ class CarController(CarControllerBase):
     # loop railed at +-300 in exactly that phase (open-loop windup), and the
     # residue on the bus at err=2 is what escalated to err=4 + TorqueFailed.
     demand = max(-CarControllerParams.STEER_MAX_REQUEST, min(CarControllerParams.STEER_MAX_REQUEST, demand))
+
+    # Guard A - opposing-hand yield WHILE THE EPS IS NOT EXECUTING (root
+    # cause 17, route 1f: the storm that latched was our demand pinned at
+    # +-200 against a 120-229 opposing hand at c=0/mt=0 - we were fighting
+    # the driver into an EPS that had refused the session). c=1 is NOT
+    # guarded: the vendor out-authorities the driver at full authority in a
+    # live session (-153 vs +166, route 7--12e) and standing down mid-fight
+    # there would recreate the armed-zero-during-fight latch class that
+    # 13b51bb5c4 removed. Output-level veto only - arming is never blocked.
+    # 0.1 s entry debounce (the demand loop flips sign legitimately at ~1 Hz,
+    # a single-frame opposition must not flap it), hysteresis exit - light
+    # hand, same-direction demand, or the EPS taking the session over.
+    if self.conflict:
+      if CS.cruise_activated or abs(drv) < CarControllerParams.STEER_YIELD_DRV_RELEASE or demand * drv >= 0:
+        self.conflict = False
+    elif not CS.cruise_activated and demand * drv < 0 and abs(drv) > CarControllerParams.STEER_YIELD_OPPOSING_TORQUE:
+      self.conflict_frames += 1
+      if self.conflict_frames >= 5:
+        self.conflict = True
+    else:
+      self.conflict_frames = 0
+
+    # Guard B - dead-session timeout (root cause 17: 1f streamed Active=1 at
+    # c=0 for ~45 s below 30 km/h; the EPS only ever waits 2.86 s for a
+    # session it wants, and it WANTED none). CruiseActivated is the EPS's own
+    # "executing" bit: an accepted session shows c=1 within the vendor's wait
+    # band. Active=1 + c=0 past STEER_C0_WAIT_FRAMES is a stream into a
+    # refusing EPS - exactly the residue that escalates err=2 -> 4. Stand
+    # down (the ramp is under the armed-zero band by construction: the
+    # silence backstop's measured 0.42 s exit is the same geometry), then
+    # hold the retry burst STEER_C0_RETRY_HOLD_FRAMES, released early if the
+    # EPS does activate. No assist is lost: at c=0 the EPS was not moving the
+    # rack anyway (mt=0 across the whole 1f storm).
+    if self.lkas_active and not CS.cruise_activated:
+      self.c0_frames += 1
+    else:
+      self.c0_frames = 0
+    if self.c0_frames >= CarControllerParams.STEER_C0_WAIT_FRAMES:
+      self.c0_hold_frames = CarControllerParams.STEER_C0_RETRY_HOLD_FRAMES
+      self.c0_frames = 0
+    if CS.cruise_activated:
+      self.c0_hold_frames = 0
+    elif self.c0_hold_frames > 0:
+      self.c0_hold_frames -= 1
+
     lkas_req_prepare = 0
 
     # The EPS's CruiseActivated bit (0x318 bit1) is its own session-PHASE
@@ -120,11 +170,14 @@ class CarController(CarControllerBase):
     # re-armed with no button press). The vendor arms at any hands state and
     # was never latched doing it; the request envelope is the protection.
 
-    # hard stops - declared by the driver or the EPS itself. The vendor has
-    # no others: it arms at zero request, fights heavy driver torque, and
-    # steers parking maneuvers at 37+ deg and 1-17 km/h.
+    # hard stops - declared by the driver (guard A) or the EPS itself. The
+    # vendor otherwise has none: it arms at zero request, steers parking
+    # maneuvers at 37+ deg and 1-17 km/h, and out-authorities the driver
+    # WHEN THE EPS IS EXECUTING (-153 vs +166 at c=1) - what 1f showed is
+    # that past ~140 of OPPOSING hand at c=0 the same stream earns err=4.
     allow = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill \
-      and not CS.torque_failed and not CS.steer_error
+      and not CS.torque_failed and not CS.steer_error and not self.conflict \
+      and self.c0_hold_frames == 0
 
     if self.lkas_active:
       if CS.torque_failed:
