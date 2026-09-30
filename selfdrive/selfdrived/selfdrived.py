@@ -232,7 +232,8 @@ class SelfdriveD(CruiseHelper):
       # after 3 s with no rising edge left to recover it, and the MADS lateral
       # would die with the session churn the main latch exists to absorb.
       # Yielding is handled downstream instead: longitudinal via the
-      # controller's session/brake gate, lateral via lkas_brake_inhibit.
+      # controller's session/brake gate; lateral does not yield to the brake
+      # at all (lkas_brake_inhibit removed 2026-09-30 - only main-off exits).
       # Consequence: MadsSteeringMode PAUSE/DISENGAGE never fire on BYD (they
       # key on this event) - REMAIN_ACTIVE is the only supported mode.
       brake_disables = CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)

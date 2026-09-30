@@ -100,7 +100,7 @@ panda 横向闸门都被绑在 stock ACC 的"session 边沿"上，而不是"main
 carcontroller 自己的两个否决（13b51bb5c4 架构收敛时刻意保留的旧硬停）：
 
 1. `lkas_brake_inhibit`：踩刹 0.06s（3 帧防抖）→ 0x316 `LKAS_Active=0`。
-   用户拍板：**可接受，保留不动**。
+   用户拍板：**可接受，保留不动**。（后被推翻——见 §七C，已删除）
 2. `STEER_ARM_DRV_TORQUE=50` 手离盘武装门（根因15/16 遗产）：释放刹车/重 SET 后
    司机正在转向（实测 drv 83~182）→ burst 反复被拒 → **1.5~4.5s 无助力**
    （1d/1e 全部 27 个空窗量化在 `scripts/brake_lateral.py` 输出里）。
@@ -167,6 +167,25 @@ values 四参数（`STEER_YIELD_OPPOSING_TORQUE=140`/`STEER_YIELD_DRV_RELEASE=90
 纯 OP 侧改动，固件不动。**路测观察项**：①低速对抗时段的退让观感（预期=司机接管方向、
 松手即回）②c=0 超时退场在起步等待期的误伤频率（9s 线）③err=2 频率（守卫的升级链应
 只出现在守卫反应前）。
+
+## 七C、刹车不再退横向（2026-09-30 深夜追加，用户拍板推翻 §七A-1）
+
+用户："设置 ACC 后不退出控车，不管刹车还是不刹车，除非退出设置。"→ 删除
+`lkas_brake_inhibit`（carcontroller 纯 OP 侧改动，固件不动，本分支提交见 git log）：
+
+- 删 `_handle_brake_inhibit` + 两个防抖常量 + allow 项。横向的刹车耦合清零：
+  **刹车期间 `LKAS_Active` 与请求流不断**，原"释放后 0.08–0.12s 再武装"整段
+  消失（replay 新场景 `brake-through`：按压全程 armed 无掉落、出力连续）。
+- 横向退出路径收敛为：**main-off 取消设置（latch+fw fall-hold）/ EPS 自报
+  TorqueFailed·SteerErrorCode / standstill 门 / 守卫 A（c=0 对向让位）·
+  守卫 B（c=0 死会话 9s 超时）**。纵向的 `!brakePressed` 让位与 SNG 刹车守卫
+  **保留**（脚刹车时 OP 不能同时给油，属让位非退出）。
+- 风险交代：长刹期间若 EPS 自行把会话判死（c=0），守卫 B 的 9s+6s 占空比是
+  安全网（§五A 已落码，18/18 replay 含 1f 复现场景不变）；**路测观察项**：
+  ①刹车期间 c 位是否保持 1（决定"刹车不断力感"是否真实达成）②长刹（>9s）
+  退场/重试节奏观感。
+- 验证：replay 18/18（场景 6 改为 brake-through 断言）；carstate/values/safety
+  未动；`selfdrived.py` 注释同步（原"lateral via lkas_brake_inhibit"作废）。
 
 ## 七、已知取舍
 

@@ -15,10 +15,6 @@ RES_INTERVAL = 125   # frames between resume presses (100 Hz loop)
 SNG_WAIT = 310       # frames to wait before first resume press
 RES_LEN = 3          # number of resume presses
 
-BRAKE_INHIBIT_PRESSED_THRESHOLD = 3   # frames of brake press before inhibiting lateral
-BRAKE_INHIBIT_RELEASE_THRESHOLD = 5   # frames of brake release before re-enabling
-
-
 class CarController(CarControllerBase):
   def __init__(self, dbc_names, CP, CP_SP):
     super().__init__(dbc_names, CP, CP_SP)
@@ -28,9 +24,6 @@ class CarController(CarControllerBase):
     self.apply_torque_last = 0
     self.apply_angle_last = 0
     self.lkas_active = False
-    self.lkas_brake_inhibit = False
-    self.brake_pressed_counter = 0
-    self.brake_release_counter = 0
     self.retry_burst = 0      # remaining ReqPrepare frames of the engage/retry burst
     self.silence_counter = 0  # armed |request|~0 backstop
     # low-speed fight guards A+B (root cause 17, values.py)
@@ -44,21 +37,6 @@ class CarController(CarControllerBase):
     self.sng_next_press_frame = 0
     self.resume_counter = 0
     self.lead_valid = False
-
-  def _handle_brake_inhibit(self, CS):
-    """Inhibit lateral control while the driver brakes (avoids LKS faults), with debounce."""
-    if CS.out.brakePressed:
-      self.brake_release_counter = 0
-      if not self.lkas_brake_inhibit:
-        self.brake_pressed_counter += 1
-        if self.brake_pressed_counter >= BRAKE_INHIBIT_PRESSED_THRESHOLD:
-          self.lkas_brake_inhibit = True
-    else:
-      self.brake_pressed_counter = 0
-      if self.lkas_brake_inhibit:
-        self.brake_release_counter += 1
-        if self.brake_release_counter >= BRAKE_INHIBIT_RELEASE_THRESHOLD:
-          self.lkas_brake_inhibit = False
 
   def _update_torque_lateral(self, CC, CS):
     """Default torque path: steer via the LKAS_Output request in ACC_MPC_STATE (790).
@@ -175,7 +153,12 @@ class CarController(CarControllerBase):
     # maneuvers at 37+ deg and 1-17 km/h, and out-authorities the driver
     # WHEN THE EPS IS EXECUTING (-153 vs +166 at c=1) - what 1f showed is
     # that past ~140 of OPPOSING hand at c=0 the same stream earns err=4.
-    allow = CC.latActive and not self.lkas_brake_inhibit and not CS.out.standstill \
+    # The brake inhibit is GONE (user decision 2026-09-30 late: braking must
+    # not exit lateral control - only main-off does). The EPS's own c-bit
+    # semantics already handle the brake-cancel case: guard B bounds any
+    # dead-session stream, so the old 0.08-0.12 s re-arm gap after every
+    # brake release disappears entirely.
+    allow = CC.latActive and not CS.out.standstill \
       and not CS.torque_failed and not CS.steer_error and not self.conflict \
       and self.c0_hold_frames == 0
 
@@ -322,8 +305,6 @@ class CarController(CarControllerBase):
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
-
-    self._handle_brake_inhibit(CS)
 
     # Transmit the spoofed 0x316 at 50 Hz UNCONDITIONALLY (engaged or not).
     # The camera's own 0x316 is blocked from relaying bus2->bus0 by the
