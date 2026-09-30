@@ -7,6 +7,12 @@
 
 ## 一、一句话现状
 
+**最新（2026-09-30 下午，`3381318edd`）：横向/纵向生命周期重构 = armed 改绑 ACC main-on**
+（三症状"无 SET 无横向 / 刹车掉横向 / CANCEL 掉横向"根因=MADS+panda 横向闸门都绑 session
+边沿；现绑 main 姿态 + 掉沿 hold，横向经刹车/CANCEL/bounce 不退，main-off 才退）。
+**待办**：刷 bin `01dac823` + 开 `AlphaLongitudinalEnabled` + 路测（全档见 `byd-lateral-lifecycle.md`）。
+以下 v2 会话架构/复验记录保留为背景。
+
 横向 = **厂商会话架构 v2**（`51b1a25a5f`：撤 c 门 + 手轻武装门 + 请求包络 200），
 **实车复验已通过**（2026-09-30 两段 route 0000000e/f：整体能控、零 TorqueFailed、
 err 不升级、armed 时段 72-84% EPS 真执行——死锁/锁存史上的 10 个根因全部关闭）。
@@ -22,10 +28,10 @@ err 不升级、armed 时段 72-84% EPS 真执行——死锁/锁存史上的 10
 
 | 项 | 值 |
 |---|---|
-| 分支 / HEAD | `main-c3l-tici`（本地含复验后文档；推送状态见 §五C-1） |
-| 设备 | comma@192.168.31.44，GitCommit=`9a46d312e4`（= v2 `51b1a25a5f` + 文档提交） |
-| 部署固件 | fw_base(0.9.x) 构建，bin sha=fec63fda…，uno+h7 已入库（`panda/board/obj/`，gitignore 需 -f）；签名比对 ✓ |
-| AlphaLongitudinalEnabled | **OFF**（纵向走原车 ACC；2026-09-30 设备实测参数不存在；固件无 Phase 2 纵向，自洽） |
+| 分支 / HEAD | `main-c3l-tici`，HEAD=`3381318edd`（armed=main-on 生命周期重构，见 `byd-lateral-lifecycle.md`；本地未推送） |
+| 设备 | comma@192.168.31.44，**关机中**；上次 GitCommit=`9a46d312e4` |
+| 部署固件 | fw_base(0.9.x) 构建，最新 bin=`01dac823`（含 acc_main=main-on+0.6s hold），**待刷**（旧 fec63fda 在设备上）；uno+h7 已入库（`panda/board/obj/`，gitignore 需 -f） |
+| AlphaLongitudinalEnabled | 设备上次实测 OFF；生命周期重构后路测须 **=1**（纵向出力闸门才生效，`byd-lateral-lifecycle.md` §五） |
 | NNLC（NeuralNetworkLateralControl） | ON（权重 json 在设备，从未路测标定；**复验发现需求振荡，A/B 是 v3 第一候选**） |
 
 ## 三、横向控制器现状（`opendbc_repo/opendbc/car/byd/`）
@@ -49,8 +55,13 @@ err 不升级、armed 时段 72-84% EPS 真执行——死锁/锁存史上的 10
 
 | 树 | 用途 | 现状 |
 |---|---|---|
-| `~/Documents/op/panda_fw_base`（0.9.x） | **当前部署固件的构建树** | allowance 120、rate 18/18、**0xf3 心跳 `controls_allowed = engaged`（立即放行/3-strike 下降）= mismatch 死锁修复**；无 MADS、无 Phase 2 纵向 |
-| `opendbc_repo/opendbc/safety/modes/byd.h`（新版式） | 未来 repo 构建固件用 | 含 MADS 接线且已修 **engaged 喂入（AccState 2/3/5，勿回退 AccOn1——宋上 AccOn1 全程 1 无边沿会死锁）** |
+| `~/Documents/op/panda_fw_base`（0.9.x） | **当前部署固件的构建树**（bin `01dac823`，待刷） | allowance 120、rate 18/18、**0xf3 心跳 `controls_allowed = engaged`（= mismatch 死锁修复）**、Phase 2 纵向 TX（0x32D/E/F，见下）、`acc_main_on = AccOn1‖AccState∈{1,2,3,5}` + 0.6s fall hold（main-on 语义，`byd-lateral-lifecycle.md`）；无 sunnypilot MADS C 状态机（横向闸门=controls_allowed，双路径驱动） |
+| `opendbc_repo/opendbc/safety/modes/byd.h`（新版式） | host libsafety 测试 + 未来 repo 构建 | 与 fw_base **acc_main 语义同步**（main-on+fall hold，`BYD_ACC_MAIN_FALL_HOLD=60`）；`acc_main_on` 喂 mads_state_update + pcm_cruise_check |
+
+> **两棵树 acc_main 必须同语义**：main-on（非 session），且 fw 掉沿 hold(0.6s) > OP carstate
+> 掉沿 debounce(0.5s)，保证 OP 先停发 → 无 0x316/0x32E 空洞（`byd-lateral-lifecycle.md` §三-b）。
+> 旧"勿回退 AccOn1"注已作废：AccOn1 单独无边沿，但 `AccOn1‖AccState∈{1,2,3,5}` 有真边沿 +
+> 0x32D 掉沿 hold 区分 main-off 与 camera glitch，不再死锁（route 19610c61f2 教训已核）。
 
 构建：`export PATH="$HOME/Documents/op/arm-tc/bin:$HOME/.local/bin:$PATH"`，
 `cd ~/Documents/op/panda_fw_base && scons -j8 board/obj/panda.bin.signed board/obj/panda_h7.bin.signed`，
@@ -104,6 +115,8 @@ err 不升级、armed 时段 72-84% EPS 真执行——死锁/锁存史上的 10
 | **三方对照+手册经验库** | `docs/byd-control-lessons.md` | 厂商/yysnet/官方手册可吸收项与决策树（新 session 先读） |
 | **v2 实车复验报告** | `docs/byd-v2-validation.md` | 2026-09-30 route 0000000e/f 全量分析：v2 达成项 + 4 项新发现（ACC bounce/流空洞/windup/振荡/boot 边沿吞噬）+ v3 待拍板清单 |
 | **v2 复验数据+脚本** | `docs_site/byd_v2_validation/` | rlog 9 段 + 21 个脚本（13 分析 + 8 调试迭代）+ src 编码备忘（gitignore 本地） |
+| **横向/纵向生命周期重构** | `docs/byd-lateral-lifecycle.md` | 2026-09-30 `3381318edd`：三症状根因（MADS+panda 绑 session 边沿）→ armed=main-on 模型 + 落码包 a–e + 部署/路测清单（**当前 HEAD 权威说明**） |
+| **部署路测数据+脚本** | `docs_site/byd_roadtest_2026-09-30/` | route 10/11/12 rlog/qlog + 21 脚本；`scripts/long_lifecycle.py`=本次三症状 OP-OFF/recovery 全帧时间线（刹车自动 resume/CANCEL 需 RES/main glitch） |
 | **代码 review 报告** | `docs/byd-code-review.md` | 09-28~09-30 提交的全量 review：2 高危（0x122 vehicle_moving / 0x32E echo-relay）+ 4 中危 + 低危清单 |
 | **控车专项深度 review** | `docs/byd-control-deep-review.md` | 聚焦"能否真正控住车"：会话状态机核对（正确）+ 7 项控车风险（轻握即脱/0x316 断流/纵向拦原厂制动/固件限速集不匹配/MADS 解耦/lead 锁死/缩放 67%） |
 | 官方维修手册文本 | `docs_site/pdf/2021年款比亚迪宋PLUS DMi-01-维修手册-*.txt` | ACC+MPC 分册（EPS 分册缺，SteerErrorCode 码表仍在找） |
