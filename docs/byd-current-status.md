@@ -7,11 +7,17 @@
 
 ## 一、一句话现状
 
-**最新（2026-09-30 下午，`3381318edd`）：横向/纵向生命周期重构 = armed 改绑 ACC main-on**
-（三症状"无 SET 无横向 / 刹车掉横向 / CANCEL 掉横向"根因=MADS+panda 横向闸门都绑 session
-边沿；现绑 main 姿态 + 掉沿 hold，横向经刹车/CANCEL/bounce 不退，main-off 才退）。
-**待办**：刷 bin `01dac823` + 开 `AlphaLongitudinalEnabled` + 路测（全档见 `byd-lateral-lifecycle.md`）。
-以下 v2 会话架构/复验记录保留为背景。
+**最新（2026-09-30 深夜，分支 `main-lon-tici`）：Phase 2 纵向固件已移植完成并构建**
+（fw_base `fee17db6`：BYD_PARAM_LONGITUDINAL 三项 = TX_MSGS_LONG/0x32E echo-relay accel 检查/
+0x32D·E·F fwd 挡；fw_base 侧 test_byd.py 95 用例全绿；repo 模式同步删除了冗余 req 门）。
+**M1 门禁已落**：selfdrived 看门狗监视 pandaStates.safetyTxBlocked——开 `AlphaLongitudinalEnabled`
+但固件未含纵向时每秒 ~150 帧拒绝即锁存 `bydLongFirmwareMissing`（NO_ENTRY+PERMANENT+SOFT_DISABLE），
+不用刷固件试错。
+**待办**：刷 fw_base `fee17db6` 出的 bin（panda=a420f59c/h7=4d5020a6 签名 hash，已入库
+`panda/board/obj/`）+ 开 `AlphaLongitudinalEnabled=1` + 路测（纵向首测清单见下 §五-B-long）；
+已知欠账：repo 侧 test_byd.py 有 2 条 MADS×main-on 用例失败（`mads_common.py
+test_enable_control_allowed_from_acc_main_on`，HEAD 上既有、与纵向无关）。
+横向仍是 `3381318edd` 起的 main-on 生命周期（三症状修复已实车复验），以下 v2 记录保留为背景。
 
 横向 = **厂商会话架构 v2**（`51b1a25a5f`：撤 c 门 + 手轻武装门 + 请求包络 200），
 **实车复验已通过**（2026-09-30 两段 route 0000000e/f：整体能控、零 TorqueFailed、
@@ -28,9 +34,9 @@ err 不升级、armed 时段 72-84% EPS 真执行——死锁/锁存史上的 10
 
 | 项 | 值 |
 |---|---|
-| 分支 / HEAD | `main-c3l-tici`，HEAD=`3381318edd`（armed=main-on 生命周期重构，见 `byd-lateral-lifecycle.md`；本地未推送） |
+| 分支 / HEAD | `main-lon-tici`（自 `main-c3l-tici` 切出；Phase 2 纵向固件移植 + M1 门禁；本地未推送） |
 | 设备 | comma@192.168.31.44，**关机中**；上次 GitCommit=`9a46d312e4` |
-| 部署固件 | fw_base(0.9.x) 构建，最新 bin=`01dac823`（含 acc_main=main-on+0.6s hold），**待刷**（旧 fec63fda 在设备上）；uno+h7 已入库（`panda/board/obj/`，gitignore 需 -f） |
+| 部署固件 | fw_base(0.9.x) HEAD=`fee17db6` 构建（main-on 生命周期 + **Phase 2 纵向三项**），panda=`a420f59c…`/h7=`4d5020a6…` 签名 hash，**待刷**（设备仍是旧 fec63fda）；uno+h7 已入库（`panda/board/obj/`，gitignore 需 -f） |
 | AlphaLongitudinalEnabled | 设备上次实测 OFF；生命周期重构后路测须 **=1**（纵向出力闸门才生效，`byd-lateral-lifecycle.md` §五） |
 | NNLC（NeuralNetworkLateralControl） | ON（权重 json 在设备，从未路测标定；**复验发现需求振荡，A/B 是 v3 第一候选**） |
 
@@ -55,7 +61,7 @@ err 不升级、armed 时段 72-84% EPS 真执行——死锁/锁存史上的 10
 
 | 树 | 用途 | 现状 |
 |---|---|---|
-| `~/Documents/op/panda_fw_base`（0.9.x） | **当前部署固件的构建树**（bin `01dac823`，待刷） | allowance 120、rate 18/18、**0xf3 心跳 `controls_allowed = engaged`（= mismatch 死锁修复）**、Phase 2 纵向 TX（0x32D/E/F，见下）、`acc_main_on = AccOn1‖AccState∈{1,2,3,5}` + 0.6s fall hold（main-on 语义，`byd-lateral-lifecycle.md`）；无 sunnypilot MADS C 状态机（横向闸门=controls_allowed，双路径驱动） |
+| `~/Documents/op/panda_fw_base`（0.9.x） | **当前部署固件的构建树**（HEAD=`fee17db6`，bin 待刷：签名 hash panda=`a420f59c…`/h7=`4d5020a6…`，已入库 `panda/board/obj/`，bin 内嵌 gitversion `DEV-fee17db6-DEBUG`） | allowance 120、rate 18/18、**0xf3 心跳 `controls_allowed = engaged`（= mismatch 死锁修复）**、`acc_main_on = AccOn1‖AccState∈{1,2,3,5}` + 0.6s fall hold（main-on 语义，`byd-lateral-lifecycle.md`）、**Phase 2 纵向（`fee17db6`：BYD_PARAM_LONGITUDINAL=2 → TX_MSGS_LONG/0x32E echo-relay accel 检查/0x32D·E·F fwd 挡）**；无 sunnypilot MADS C 状态机（横向闸门=controls_allowed，双路径驱动）；纵向测试 `tests/safety/test_byd.py` 95 绿（libpanda 主机仿真，macOS 手工 cc 构建） |
 | `opendbc_repo/opendbc/safety/modes/byd.h`（新版式） | host libsafety 测试 + 未来 repo 构建 | 与 fw_base **acc_main 语义同步**（main-on+fall hold，`BYD_ACC_MAIN_FALL_HOLD=60`）；`acc_main_on` 喂 mads_state_update + pcm_cruise_check |
 
 > **两棵树 acc_main 必须同语义**：main-on（非 session），且 fw 掉沿 hold(0.6s) > OP carstate
@@ -88,21 +94,46 @@ err 不升级、armed 时段 72-84% EPS 真执行——死锁/锁存史上的 10
 4. **err=2 警告频率 ✓**：9 seg 零 err≥2 记录。
 5. 手感：用户反馈"整体有控车、效果还不错"；对抗时正面出力 = 厂商原味。
 
+### B-long. 纵向首测清单（刷 `fee17db6` bin + AlphaLongitudinalEnabled=1 后）
+1. **静态**：启动后 `pandaState.safetyParam=2`（byd@35+LONGITUDINAL）、全程无
+   `bydLongFirmwareMissing`/controlsMismatch；bus0 只见 OP 重播的 0x32D/E/F（fwd 挡生效：
+   每地址 bus0 无双重源，src128 环回计数≈3×50Hz 与 CC 周期一致）。
+2. **进入链**：main-on 武装 → engage；跟车时 0x32E 的 `AccControlActive=1`+AccelCmd=OP 值
+   （限速 [-4,2] m/s²，raw 20–140）；减速度/加速请求与 controlsd 输出一致（对照
+   carControl.actuators.accel）。
+3. **让位**：踩刹车 → python 闸门回 echo（ACA=0，按雷达帧透传），车按原厂减速；松刹
+   原厂自动 resume（~40ms 带内）；**横向全程不掉**（main-on 生命周期，§三）。
+4. **SNG**：停车跟停后 standstill→起步走 `LongCtrlState.starting` 脉冲
+   ResumeFromStandstill（厂商无此数据样本，首测重点观察起步平顺/迟滞）。
+5. **取消/退出**：CANCEL→需 RES；main-off→纵向横向全退（唯一主动退出路径）；EPS/故障
+   硬停在档。
+6. **AEB 通道**：确认 0x32F 心跳回声正常、原厂 AEB/ESP 介入不被本移植遮挡
+   （`byd-control-deep-review.md` 风险 3"纵向拦原厂制动"实车核验项）。
+7. **观察项**：`long_lifecycle.py` 时间线复用到纵向（OP-OFF/recovery 全帧），
+   ACC bounce 风暴期 0x32E 输出连续性（对照 §四 复验报告）。
+
 ### C. 遗留工程（实车干净后再动）
-1. **推送 origin**：`28145a1c3b`（Phase 2 纵向）到 `0cfd780854` 全部未推送。
-2. **Phase 2 固件同步**：开 AlphaLongitudinalEnabled 前必须把 repo byd.h 的纵向
-   （TX_MSGS_LONG/0x32E accel/fwd 挡）+ MADS 移植进 fw_base（0.9.x API 不同，手工移植），
-   或切换到 repo opendbc_repo panda 树构建。
-3. **横向环稳定性**：route c9f1698c82 出现过 demand ±130 饱和振荡（3Hz）。
+1. **推送 origin**：`28145a1c3b`（Phase 2 纵向）到 `0cfd780854` 及 `main-lon-tici` 全部未推送。
+2. **Phase 2 固件同步** ✅（2026-09-30 `fee17db6`）：纵向三项已手工移植进 fw_base；
+   MADS 未移植（本树以 controls_allowed 双路径驱动横向，非必需）。注意：fw_base 移植版
+   删除了旧版 torque 路径冗余的显式 `lka_active && !controls_allowed` 门（与 repo byd.h
+   一致；空闲帧 LKAS_Active=0 本就通过，engage 帧受中心检查约束，行为等价）。
+3. **M1 门禁** ✅（本分支）：selfdrived.py `BYD_LONG_FW_BLOCKED_PER_SEC=60` 看门狗 +
+   `EventName.bydLongFirmwareMissing`（cereal/log.capnp @98）。未刷纵向固件时开
+   AlphaLongitudinalEnabled 会拒绝进入并保持告警，而非静默失效。
+4. **横向环稳定性**：route c9f1698c82 出现过 demand ±130 饱和振荡（3Hz）。
    架构重写后环已闭环，但未实车确认；下次 route 直接查我方 TX 的 sign-flips
    （厂商包络：27s 内 8 次）与 armed-silence。
    **本地回放已过（2026-09-29）**：c9f1698c82--0 与 909633d7ed--5（根因 15 泊车
    场景）灌新控制器均 CLEAN——armed-silence 最差 0.02s/0.08s（锁存带 0.48-0.72s），
    sign flips 均 5 次（包络 8/27s）；replay_latches.py 11 场景全绿。仅剩实车确认。
-4. NNLC A/B：NN 权重从未标定，若振荡复现先关 NeuralNetworkLateralControl 对比。
-5. 厂商行为还原（ELF `byd_adjust_steer_torque` 可反汇编）：get_byd_torque_limits 的
+5. NNLC A/B：NN 权重从未标定，若振荡复现先关 NeuralNetworkLateralControl 对比。
+6. 厂商行为还原（ELF `byd_adjust_steer_torque` 可反汇编）：get_byd_torque_limits 的
    LOW flag 选择、24s 连续转向降额+SDA、STEERING_TORQUE_LIMIT_SPEED 速度曲线。
-6. `sync-20251218-tici` 分支同步：今天的架构/固件/参数改动都要合过去（另一条产品线）。
+7. `sync-20251218-tici` 分支同步：今天的架构/固件/参数改动都要合过去（另一条产品线）。
+8. repo 侧 `opendbc/safety/tests/test_byd.py` 2 条 MADS×main-on 用例失败
+   （`test_enable_control_allowed_from_acc_main_on`，mads_enabled 子例，`3381318edd`
+   生命周期重构后未适配 main 掉沿 hold/直接 setter 的期望）——与纵向无关，待单独修。
 
 ## 六、资料与工具索引
 

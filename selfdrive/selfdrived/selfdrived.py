@@ -46,6 +46,13 @@ SafetyModel = car.CarParams.SafetyModel
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
+# BYD M1 longitudinal firmware capability gate (docs/byd-code-review.md): the controller
+# streams 0x32D/0x32E/0x32F at 50 Hz whenever openpilotLongitudinalControl is on, so
+# firmware without the BYD_PARAM_LONGITUDINAL safety param rejects ~150 frames/s while
+# supported firmware stays at ~0 (blocked frames only come from genuine safety
+# violations, which never hit this sustained rate in normal operation).
+BYD_LONG_FW_BLOCKED_PER_SEC = 60
+
 
 class SelfdriveD(CruiseHelper):
   def __init__(self, CP=None, CP_SP=None):
@@ -165,6 +172,11 @@ class SelfdriveD(CruiseHelper):
     self.mads = ModularAssistiveDrivingSystem(self)
 
     self.car_events_sp = CarSpecificEventsSP(self.CP, self.params)
+
+    # BYD M1 watchdog state (see BYD_LONG_FW_BLOCKED_PER_SEC above)
+    self.byd_long_fw_blocked = False
+    self._byd_long_blocked_prev = None
+    self._byd_long_blocked_acc = 0
 
     CruiseHelper.__init__(self, self.CP)
 
@@ -338,6 +350,25 @@ class SelfdriveD(CruiseHelper):
 
       if log.PandaState.FaultType.relayMalfunction in pandaState.faults:
         self.events.add(EventName.relayMalfunction)
+
+    # BYD M1: longitudinal firmware capability watchdog - AlphaLongitudinalEnabled on
+    # firmware without the LONGITUDINAL safety param means every 0x32D/E/F frame the
+    # controller transmits is rejected; latch once and keep the driver informed so the
+    # car is never driven believing OP longitudinal is active when it is inert.
+    if (self.CP.brand == "byd" and self.CP.openpilotLongitudinalControl and
+        not REPLAY and self.sm.all_checks(['pandaStates'])):
+      blocked = sum(ps.safetyTxBlocked for ps in self.sm['pandaStates'])
+      # safety re-init (mode/param switch, reflash) resets the counters - resync
+      if self._byd_long_blocked_prev is None or blocked < self._byd_long_blocked_prev:
+        self._byd_long_blocked_prev = blocked
+      self._byd_long_blocked_acc += blocked - self._byd_long_blocked_prev
+      self._byd_long_blocked_prev = blocked
+      if self.sm.frame % int(1.0 / DT_CTRL) == 0:
+        if self._byd_long_blocked_acc > BYD_LONG_FW_BLOCKED_PER_SEC:
+          self.byd_long_fw_blocked = True
+        self._byd_long_blocked_acc = 0
+      if self.byd_long_fw_blocked:
+        self.events.add(EventName.bydLongFirmwareMissing)
 
     # Handle HW and system malfunctions
     # Order is very intentional here. Be careful when modifying this.
