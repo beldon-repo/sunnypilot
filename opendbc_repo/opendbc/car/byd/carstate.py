@@ -4,6 +4,15 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.byd.values import DBC, CarControllerParams
 
+# Boot-mid-cruise engage hold (see the latch block in update): when the device
+# boots while the stock ACC is already engaged, cruiseState.enabled is held
+# False for this long after CAN start, then let through - so the engagement
+# edge happens exactly once, late, when every NO_ENTRY gate is ready. Matches
+# the selfdrived ready window (~15 s) and the vendor's own boot-mid-cruise
+# drive (route 7--12e: radar ACC active from t=0, their latch held 0 through
+# t=17.5 s, then one edge - OP enabled the same frame).
+BOOT_LATCH_HOLD_TIME = 15.0  # seconds
+
 
 class CarState(CarStateBase):
   def __init__(self, CP, CP_SP):
@@ -18,6 +27,7 @@ class CarState(CarStateBase):
     self.counter_pcm_buttons = 0
     self.eps_state_msg = {}
     self.is_cruise_latch = False
+    self.boot_frames = 0  # update() calls since process start (100 Hz card loop)
     # stock camera's ACC_MPC_STATE (bus 2); echoed back on bus 0 by the
     # controller so the spoofed LKAS request keeps the camera's SETME_* fields
     self.cam_lkas = {}
@@ -140,6 +150,18 @@ class CarState(CarStateBase):
       self.is_cruise_latch = False
     else:
       self.is_cruise_latch = True
+
+    # boot-mid-cruise engage hold: reporting the raw latch immediately after
+    # boot fires the pcmEnable edge while OP cannot act on it (canValid still
+    # false / NO_ENTRY ready window), eating it for good - OP stays disabled
+    # until the driver cycles ACC (route 0000000f: 20.6 s ACC-on/OP-off).
+    # Holding the latch low here makes the edge land late and genuine instead:
+    # OP engages the frame the hold expires. A SET pressed during the hold is
+    # absorbed into the hold-end edge; a cancel during the hold keeps the raw
+    # latch low, so nothing engages. cruiseState.available stays raw.
+    self.boot_frames += 1
+    if self.boot_frames < int(BOOT_LATCH_HOLD_TIME * 100):  # card loop = 100 Hz
+      self.is_cruise_latch = False
 
     ret.cruiseState.enabled = self.is_cruise_latch
     # stock LKA is coupled to the stock ACC on this platform; used by the

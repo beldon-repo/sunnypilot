@@ -12,7 +12,8 @@
 err 不升级、armed 时段 72-84% EPS 真执行——死锁/锁存史上的 10 个根因全部关闭）。
 **下一步 = v3 小改拍板**（复验暴露 4 项，全不锁存）：①NNLC A/B（振荡第一嫌疑）
 ②需求振荡杠杆（governor/EMA，sign flips 已坐实）③boot-mid-cruise engage 边沿吞噬
-（**✅ 已修复实现**，boot 时 ACC 已 engaged → 3s 补发 pcmEnable，见复验报告 §二，待路测）
+（**✅ 已按厂商同款修复**——carstate 层 `BOOT_LATCH_HOLD_TIME=15` 压 latch 出迟到真边沿，
+厂商 7--12e 实录解码，car_specific 零改动；见复验报告 §二，待路测）
 ④等待相位 windup（c=0 时 demand rail 200）。
 另有 ACC bounce 风暴观察项（armed 时雷达 ACA 2Hz 打摆 → 我方 0x316 退场流空洞，
 贴线未升级），详见复验报告 §四。

@@ -10,15 +10,6 @@ GearShifter = structs.CarState.GearShifter
 EventName = log.OnroadEvent.EventName
 NetworkLocation = structs.CarParams.NetworkLocation
 
-# BYD boot-mid-cruise: the device may finish booting long after the driver
-# already engaged stock ACC. cruiseState.enabled is then latched from the very
-# first CarState and the pcmEnable rising edge is lost forever (it fires while
-# canValid is still false / wrongCarMode NO_ENTRY is up because the bus-2 ACC
-# frames have not arrived yet), leaving OP disabled until the driver cycles ACC
-# (route 0000000f: 20.6 s of ACC-on/OP-off). After this much *continuous*
-# stock-ACC engagement with OP still disabled, re-issue the missed enable once.
-BOOT_ENGAGE_STEADY_TIME = 3.0  # seconds
-
 
 # TODO: the goal is to abstract this file into the CarState struct and make events generic
 class MockCarState:
@@ -44,10 +35,6 @@ class CarSpecificEvents:
     self.no_steer_warning = False
     self.silent_steer_warning = True
 
-    # BYD boot-mid-cruise missed-enable synth (see BOOT_ENGAGE_STEADY_TIME)
-    self.boot_engage_frames = 0    # consecutive frames of the stock-ACC latch with OP disabled
-    self.boot_engage_fired = False  # once OP has enabled (any path), never re-issue
-
   def update(self, CS: car.CarState, CS_prev: car.CarState, CC: car.CarControl):
     if self.CP.brand in ('body', 'mock'):
       events = Events()
@@ -60,31 +47,6 @@ class CarSpecificEvents:
 
     elif self.CP.brand == 'byd':
       events = self.create_common_events(CS, CS_prev)
-
-      # Boot-mid-cruise missed-enable synthesis (route 0000000f: 20.6 s of
-      # ACC-on/OP-off). This is the driver's own SET press that OP slept
-      # through: every NO_ENTRY gate (gear, door, calibration, faults, ...)
-      # still runs in the state machine - we only restore the intent edge.
-      # Hands-light is deliberately NOT required - a genuine SET press does
-      # not need it either; the EPS session arm gate (STEER_ARM_DRV_TORQUE)
-      # handles hands at arm time. Standstill is likewise allowed: the
-      # controller blocks the lateral arm at standstill anyway.
-      if CS.cruiseState.enabled and not CS.brakePressed:
-        self.boot_engage_frames += 1
-      else:
-        self.boot_engage_frames = 0
-
-      # once OP is enabled by any path, the missed edge is moot for good -
-      # this also stops the synth from ever re-firing after a real cancel
-      if CC.enabled:
-        self.boot_engage_fired = True
-
-      # retry each frame while OP is still disabled (a NO_ENTRY at fire time,
-      # e.g. the ready window, does not consume the synth - it engages as
-      # soon as the gate clears)
-      if not self.boot_engage_fired and not CC.enabled and \
-          self.boot_engage_frames >= int(BOOT_ENGAGE_STEADY_TIME / DT_CTRL):
-        events.add(EventName.pcmEnable)
 
     elif self.CP.brand == 'chrysler':
       events = self.create_common_events(CS, CS_prev, extra_gears=[GearShifter.low])

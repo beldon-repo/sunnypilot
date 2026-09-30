@@ -35,18 +35,22 @@
 **"多次重新进入"的解释**：每次取消→重 SET 只造一次边沿；前几次失败 = 撞 selfdrived
 就绪窗口（点火后 ~15s，ops 文档 §三.2 已知）。就绪后的重进一次即成功。
 
-**修复候选（v3-1，不碰 EPS 面向行为）——✅ 已实现（见 `selfdrive/car/car_specific.py` BYD 分支
-`BOOT_ENGAGE_STEADY_TIME`）**：stock ACC 的严格 latch（AccControlActive 基）连续保持 ≥3s 且 OP
-仍未 enabled → 补发一次 pcmEnable。设计要点：
-- **所有 NO_ENTRY 门照常**（gear/door/标定/故障）——只恢复"司机意图边沿"，不绕任何检查；
-  就绪窗口（NO_ENTRY）期间的补发**不消耗**，每帧重试直到门清（单测覆盖）。
-- **手轻不要求**（与真 SET 按压对齐；手轻由 EPS 武装门 `STEER_ARM_DRV_TORQUE` 在会话层管）；
-  standstill 同理允许（controller 侧 standstill 本就挡武装）。
-- **自限**：CC.enabled 一旦 True 永不再发（真边沿激活→合成器永久退役；之后的取消/重 SET
-  走真边沿，不自动重engage）。
-- 单测：`selfdrive/car/tests/test_car_specific.py` 5 场景（steady 时序/无 ACC/刹车重置/
-  NO_ENTRY 重试/真 enable 后退役），本地 `pytest --noconftest -c /dev/null`（arm-only .so
-  需 stub，见测试文件头）。待实车复验：boot 时 ACC 已开 → 就绪后 ~3s 应自动出绿框。
+**修复实现——✅ 厂商同款方案（`opendbc/car/byd/carstate.py` `BOOT_LATCH_HOLD_TIME`）**。
+初版曾在 `car_specific.py` 合成 pcmEnable（厂商从不改该文件，层不对）；后从**厂商自己的
+boot-mid-cruise 日志**（7--12e_0，雷达 ACA 全程=1）解码出厂商真实机制并照搬：
+
+```
+厂商实录: 3.18s latch=0/avail=0（ACC 明明 active 却压着）→ 16.74s avail=1 → 17.54s latch=1
+         （真边沿）→ 17.55s OP enabled 同帧接上
+```
+
+**厂商 = 在 carstate 层把 latch 压 ~15s（engage cooldown），让边沿"迟到但真"**——
+canValid/就绪窗口全部就绪后边沿才发出，通用层零改动。我们的实现：CAN 启动后前 15s
+`is_cruise_latch` 强制 False（raw latch 照算），到期自然放行 → 唯一一次真边沿。
+hold 期间按 SET → 被吸收进 hold 结束的边沿；hold 期间取消 → raw latch 为 False 无边沿。
+`cruiseState.available` 保持 raw 不压。
+单测：`selfdrive/car/tests/test_byd_carstate.py` 3 场景（hold 时序/hold 中取消/无 ACC），
+`pytest --noconftest -c /dev/null`。**待实车复验**：boot 时 ACC 已开 → ~15s 后应自动出绿框。
 
 ## 三、症状 1：绿框早、控车晚 = 三层延迟叠加（第 1 段）
 

@@ -45,6 +45,16 @@ elif (...) and abs(prev - cam_msg['LKAS_Output']) <= K * 2:
 - `ALT_HANDSOFF_CARS = (SEAL_06_DMI, SEAL_07_DMI_22, SEAL_07_DMI_24)`——手离盘计时清零仅海豹系启用；**宋不在列表**（我们 hands-off timer 降 P2 的第二个依据）。
 - 角度路径 `MPC_LKAS_CMD_ANGLE`（带 JerkUpper/LowerLimit、SET_ME_3=3）仅 `BYD_ANGLE_CONTROL` 车型——**宋不涉及**。
 
+### 2.5 engage cooldown / boot latch hold（carstate 层，2026-09-30 从 7--12e 实录解码）
+
+厂商 carstate 自带 engage 状态机（disasm 名字表：`is_cruise_latch`/`prev_is_cruise_latch`/
+`btn_acc_set_reset`/`btn_acc_cancel`/`engage_cooldown`/`lkas_btn`），**boot-mid-cruise 时把
+cruiseState.enabled 压 ~15s 再放行**——边沿迟到但真，通用事件层零改动（他们的 car_specific.py
+零 byd 改动）。实录（7--12e_0，雷达 ACA 全程 active）：3.18s latch=0/avail=0 → 16.74s
+avail=1 → 17.54s latch=1（真边沿）→ 17.55s OP enabled 同帧。**已照搬**：我们
+`byd/carstate.py` `BOOT_LATCH_HOLD_TIME=15`。反例教训：同一症状在 car_specific 层合成
+pcmEnable（已撤）也能修，但层不对——**先问"厂商在哪层管这件事"再动手**。
+
 ## 三、社区 port 的发现
 
 ### 3.1 yysnet（`/Users/wujiafu/Documents/op/opendbc/`）——最有价值的一项
