@@ -1,7 +1,9 @@
 # BYD 宋 PLUS DM-i · 横向/纵向生命周期重构：armed = ACC main-on
 
-> 2026-09-30。提交 `3381318edd`（本分支 `main-c3l-tici`）。固件 fw_base 重建
-> hash `01dac823`，已入库 `panda/board/obj/panda.bin.signed`。设备关机，路测待做。
+> 2026-09-30。提交 `3381318edd`（本分支 `main-c3l-tici`）。固件已部署并签名验证
+> （设备 `get_signature()` 头 8 字节 `25e1b0be…` == 入库 `panda.bin.signed`，sha256
+> 前缀 `c19b5359`；本文早先写的 `01dac823` 是重建前的旧标签，作废）。
+> **部署后复验见 §八（route 1c/1d/1e + 补丁 `447a360e53`）。**
 
 ## 一、症状与根因（一个根因，两层同病）
 
@@ -84,6 +86,33 @@ panda 横向闸门都被绑在 stock ACC 的"session 边沿"上，而不是"main
 - **点火残留**：boot 时 ACC 开着（AccState=1 无 session）→ 15s boot hold 内不武装、
   出 hold 也不凭空 engage（ever_engaged 挡着）；司机 SET 后才 engage。
 - 顺带：armed-零背停、EPS 锁存（横向手感层，与本重构正交，见 v2-validation §八）。
+
+## 七A、部署后复验（2026-09-30 晚，route 1c/1d/1e；数据 `docs_site/byd_brake_2026-09-30/`）
+
+设备跑 `3a257f1eac`+新固件（签名核对 ✓），实车参数 `Mads=0`、
+`AlphaLongitudinalEnabled` 未开（与 §五 清单不同，是本次复验的真实语境）。
+1c=下午旧代码（刹车时 CSEN/SD/FWCA 三层随 session 全掉=旧模型基线），
+1d/1e=晚上新代码。**生命周期重构实证通过**：21+16 次刹车按压中
+`cruiseState.enabled`/`selfdriveState.enabled`/fw `controlsAllowed` **无一随刹车掉**；
+取消→重新 SET 的 CSEN/FWCA 恢复也正常（1e 33.4→34.26 CSEN 防抖-恢复链吻合设计）。
+
+**但用户报"踩刹车依然退出/取消后重 SET 无助力非按 RES 不可"。根因是本文档漏掉的第四层**——
+carcontroller 自己的两个否决（13b51bb5c4 架构收敛时刻意保留的旧硬停）：
+
+1. `lkas_brake_inhibit`：踩刹 0.06s（3 帧防抖）→ 0x316 `LKAS_Active=0`。
+   用户拍板：**可接受，保留不动**。
+2. `STEER_ARM_DRV_TORQUE=50` 手离盘武装门（根因15/16 遗产）：释放刹车/重 SET 后
+   司机正在转向（实测 drv 83~182）→ burst 反复被拒 → **1.5~4.5s 无助力**
+   （1d/1e 全部 27 个空窗量化在 `scripts/brake_lateral.py` 输出里）。
+   **RES 不是恢复原因**：腾手去拨杆的瞬间 drv<50 门才开（1d t=162.48 未按任何
+   按钮、手离盘自动武装；1e t=36.01 弯中松手 0.03s 后 `c=1 mt=81` 真实出力）。
+   用户拍板：**手力门彻底删除**（厂商在任何手力下武装且从未因此锁存；锁存源
+   rail/振荡已被 13b51bb5c4 + STEER_MAX_REQUEST=200 结构性移除）。
+   修复 `447a360e53`：replay 14/14（cold-arm 在 cmd2 武装、|out|≤200）、
+   carstate 7 + 接口 1 全绿。**下次路测重点=删门后冷/热武装的 EPS err 频率**。
+
+分析注意：TX 0x316 必须走 `can`（src=128）解析，`sendcan` 不带 src 会把
+bus=128 parser 喂瞎（本轮曾因此误判"Active 恒 0"）。
 
 ## 七、已知取舍
 
