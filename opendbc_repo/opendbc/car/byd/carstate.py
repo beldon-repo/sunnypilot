@@ -13,6 +13,16 @@ from opendbc.car.byd.values import DBC, CarControllerParams
 # t=17.5 s, then one edge - OP enabled the same frame).
 BOOT_LATCH_HOLD_TIME = 15.0  # seconds
 
+# ACC-main fall debounce: the camera itself drops the ACC main posture for
+# ~2 s with no button event (route 11 t=156.4, route 12 t=200.3: AccState and
+# AccOn1 fall together, then recover). Since main-on is the arm for BOTH axes
+# (MADS lateral arms/disarms on its edges, the engage latch rides on it), a
+# raw fall flaps every state machine OP has. Hold main through drops shorter
+# than this. The panda holds its own copy slightly LONGER (PANDA_AVAIL_FALL_HOLD
+# in byd.h) so OP always stops transmitting first - an OP/panda window mismatch
+# in the other direction would punch holes into the 0x316/0x32E streams.
+AVAIL_FALL_DEBOUNCE_TIME = 0.5  # seconds of card loop (100 Hz)
+
 
 class CarState(CarStateBase):
   def __init__(self, CP, CP_SP):
@@ -28,6 +38,13 @@ class CarState(CarStateBase):
     self.eps_state_msg = {}
     self.is_cruise_latch = False
     self.boot_frames = 0  # update() calls since process start (100 Hz card loop)
+    self.avail_fall_frames = 0  # consecutive updates without the ACC main posture
+    # one genuine radar session (AccControlActive / AccState 2/3/5) seen this
+    # drive cycle - same lifecycle as boot_frames (process start == ignition).
+    # Gates the engage latch: the ignition-leftover posture (AccState=1,
+    # SetSpeed=30, AccOn1=1, still in Park - route 0000000f) reports main
+    # without a session and must never arm OP by itself.
+    self.ever_engaged = False
     # stock camera's ACC_MPC_STATE (bus 2); echoed back on bus 0 by the
     # controller so the spoofed LKAS request keeps the camera's SETME_* fields
     self.cam_lkas = {}
@@ -116,15 +133,34 @@ class CarState(CarStateBase):
       bool(abs(ret.steeringTorque) > CarControllerParams.STEER_THRESHOLD), 5)
 
     # stock ACC status; LKA is coupled to the stock ACC on this platform
-    # Song Plus DM-i encodes AccState differently from Han: 1 = ACC_ACTIVE,
-    # 7 = main on / standby (observed with SetSpeed=30, AccOn1=1)
+    # Song Plus DM-i encodes AccState differently from Han: 1 = main on /
+    # standby (also the ignition-leftover state, SetSpeed=30, Park), 2/3/5 =
+    # engaged-only states. Two independent things live in here:
+    #
+    #   main    = AccOn1 or AccState in (1,2,3,5)  - the stalk's main switch.
+    #             Survives brake-cancel / CANCEL / the radar's bounce blips
+    #             (AccOn1 stays 1 through all of them, route 11/12); drops
+    #             only when the driver turns ACC off (or the camera glitches,
+    #             hence the debounce).
+    #   session = AccControlActive or AccState in (2, 3, 5) - the radar
+    #             actually commanding (0x32e). Bounces (60-110 ms AccState
+    #             2<->1 flaps), drops on brake (stock auto-resumes ~40 ms
+    #             after release, route 11/12: 5/5 windows) and on CANCEL.
+    #
+    # cruiseState.available = debounced main. It is the arm for BOTH axes:
+    # MADS lateral arms/disarms on its edges (mads.py lkasEnable/lkasDisable)
+    # and the engage latch below rides on it - so it must track the stalk,
+    # not the radar's session churn.
     acc_state = int(cp_adas.vl["ACC_HUD_ADAS"]["AccState"])
     acc_on1 = bool(cp_adas.vl["ACC_HUD_ADAS"]["AccOn1"])
-    ret.cruiseState.available = acc_on1 or acc_state in (1, 2, 3, 5)
+    raw_main = acc_on1 or acc_state in (1, 2, 3, 5)
+    self.avail_fall_frames = 0 if raw_main else self.avail_fall_frames + 1
+    acc_main = raw_main or self.avail_fall_frames < int(AVAIL_FALL_DEBOUNCE_TIME * 100)
+    ret.cruiseState.available = acc_main
     set_speed = cp_adas.vl["ACC_HUD_ADAS"]["SetSpeed"]
     # follow the stock ACC set speed directly (community port does the same);
     # no artificial 30 km/h floor
-    ret.cruiseState.speedCluster = set_speed * CV.KPH_TO_MS if ret.cruiseState.available else 0.
+    ret.cruiseState.speedCluster = set_speed * CV.KPH_TO_MS if acc_main else 0.
     ret.cruiseState.speed = ret.cruiseState.speedCluster
 
     acc_control_active = bool(cp_adas.vl["ACC_CMD"]["AccControlActive"])
@@ -135,21 +171,20 @@ class CarState(CarStateBase):
     self.res_btn_pressed = cp.vl["PCM_BUTTONS"]["BTN_AccUpDown_Cmd"] != 0
     self.counter_pcm_buttons = cp.vl["PCM_BUTTONS"]["Counter"]
 
-    # cruiseState.enabled must strictly track real stock-ACC engagement: the
-    # pcmEnable rising edge on `enabled` is what engages openpilot, so a
-    # phantom-true at ignition eats the edge and ACC-on-then-SET never
-    # produces a second one. AccState=1 is ambiguous on Song Plus DM-i - the
-    # camera reports it at ignition (leftover state, SetSpeed=30, still in
-    # Park) and again after a brake disengage, while it is not commanding the
-    # car. AccControlActive (0x32e) is the reliable engagement signal observed
-    # on real drives: 0 at ignition-leftover/standby, 1 whenever the MPC
-    # actually commands ACC, including the SNG standstill hold
-    # (StandstillState=1). AccState 2/3/5 are engaged-only states.
     stock_acc_on = acc_control_active or acc_state in (2, 3, 5)
-    if not ret.cruiseState.available or ret.brakePressed or not stock_acc_on:
-      self.is_cruise_latch = False
-    else:
-      self.is_cruise_latch = True
+    self.ever_engaged = self.ever_engaged or stock_acc_on
+
+    # cruiseState.enabled = the arm latch: main-on (debounced) + ever engaged.
+    # Brake and session drops deliberately do NOT clear it - that is the whole
+    # point: the longitudinal state machine stops churning with the radar's
+    # session (brake -> stock standby -> old latch fell -> pcmDisable killed
+    # both axes; CANCEL/bounce did the same with no auto-recovery), lateral
+    # survives everything short of main-off, and the longitudinal output is
+    # gated on the live session downstream (carcontroller session gate +
+    # panda acc checks). AccControlActive is the reliable session signal: 0
+    # at ignition-leftover/standby, 1 whenever the MPC actually commands ACC,
+    # including the SNG standstill hold (StandstillState=1).
+    self.is_cruise_latch = acc_main and self.ever_engaged
 
     # boot-mid-cruise engage hold: reporting the raw latch immediately after
     # boot fires the pcmEnable edge while OP cannot act on it (canValid still
@@ -157,8 +192,7 @@ class CarState(CarStateBase):
     # until the driver cycles ACC (route 0000000f: 20.6 s ACC-on/OP-off).
     # Holding the latch low here makes the edge land late and genuine instead:
     # OP engages the frame the hold expires. A SET pressed during the hold is
-    # absorbed into the hold-end edge; a cancel during the hold keeps the raw
-    # latch low, so nothing engages. cruiseState.available stays raw.
+    # absorbed into the hold-end edge. cruiseState.available stays live.
     self.boot_frames += 1
     if self.boot_frames < int(BOOT_LATCH_HOLD_TIME * 100):  # card loop = 100 Hz
       self.is_cruise_latch = False

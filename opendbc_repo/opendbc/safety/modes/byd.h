@@ -34,6 +34,17 @@
 
 static bool byd_brake_pedal_pressed = false;
 
+// ACC main fall hold (0x32D frames). The camera drops the main posture for
+// ~2 s with no button event (route 11 t=156.4, route 12 t=200.3); hold
+// through drops shorter than this so the edge machinery only sees genuine
+// main-off. 60 frames at the measured 100 Hz 0x32D rate = 0.6 s -
+// deliberately LONGER than OP's own 0.5 s available debounce (carstate
+// AVAIL_FALL_DEBOUNCE_TIME) so OP always stops transmitting first; the
+// opposite window (OP still sending, panda already refusing) would punch
+// holes into the 0x316/0x32E streams.
+#define BYD_ACC_MAIN_FALL_HOLD 60U
+static unsigned int byd_acc_main_hold = 0U;  // 0x32D frames since main dropped
+
 static void byd_mads_update(void);
 
 static void byd_rx_hook(const CANPacket_t *msg) {
@@ -89,20 +100,35 @@ static void byd_rx_hook(const CANPacket_t *msg) {
   // NOTE(Song Plus DM-i): the stock DiPilot camera sits on the intercepted
   // camera-side CAN (bus 2), so its messages are received on bus 2.
   if ((msg->addr == 0x32DU) && (msg->bus == 2U)) {
-    // AccState 19|3: Song encoding - 0 = OFF, 7 = main on / standby;
-    // the engaged value(s) on Song Plus are not confirmed yet, so treat
-    // every non-standby state as engaged (pcm_cruise_check only enforces
-    // cancellation when the stock ACC turns off).
+    // Two independent postures live in this frame (route 11/12 verified):
+    //   main    - the stalk's ACC main switch: AccOn1 (data[2] bit 6) or
+    //             AccState 1/2/3/5. Survives brake-cancel, CANCEL and the
+    //             radar's bounce blips (AccOn1 stays 1 through all of them);
+    //             drops only when ACC is turned off.
+    //   session - the radar actually commanding: AccControlActive (0x32E)
+    //             or AccState 2/3/5. Drops on brake (stock auto-resumes
+    //             ~40 ms after release), CANCEL and the 60-110 ms flaps.
+    // acc_main_on feeds pcm_cruise_check AND the MADS state machine, and OP's
+    // whole lifecycle hangs on it. It must be the MAIN posture, not the
+    // session: lateral permission has to survive brake / CANCEL / bounce
+    // (the driver never asked anything to stop) - the old {2,3,5} test made
+    // every brake press fire the MADS ACC_MAIN_OFF falling edge, killing
+    // lateral control with the session churn the car itself produces.
+    //
+    // The route 19610c61f2 deadlock ("feeding AccOn1 = no edges") does not
+    // apply to this definition: AccOn1 alone is always-1, but main here does
+    // fall (genuine main-off -> AccOn1=0 + AccState=0) and rise again, and
+    // the heartbeat op_controls_allowed rising edge re-requests controls
+    // after any exit regardless.
     uint8_t acc_state = ((msg->data[2] >> 3) & 0x7U);
-    // Song Plus DM-i engagement encoding (route-verified): AccState 2/3/5 are
-    // the engaged-only states; AccState=1 is an ambiguous standby that also
-    // shows up at ignition and after a brake cancel, and AccOn1 (22|1) stays 1
-    // through both - so neither may stand in for "engaged". MADS needs the
-    // engaged RISING edge to re-request controls after any exit: feeding it
-    // AccOn1 deadlocked the panda (controls_allowed stuck 0 while OP was
-    // active for 106 s -> upstream 60 s mismatch counter fired "Controls
-    // Mismatch", route 19610c61f2 t=579).
-    acc_main_on = (acc_state == 2U) || (acc_state == 3U) || (acc_state == 5U);
+    bool acc_on1 = GET_BIT(msg, 22U);
+    bool raw_main = acc_on1 || (acc_state == 1U) || (acc_state == 2U) || (acc_state == 3U) || (acc_state == 5U);
+    if (raw_main) {
+      byd_acc_main_hold = 0U;
+    } else {
+      byd_acc_main_hold += 1U;
+    }
+    acc_main_on = raw_main || (byd_acc_main_hold < BYD_ACC_MAIN_FALL_HOLD);
     pcm_cruise_check(acc_main_on);
   }
 

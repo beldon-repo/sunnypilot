@@ -207,7 +207,9 @@ class CarController(CarControllerBase):
 
   def _update_sng_auto_resume(self, CC, CS, can_sends):
     """Spoof the ACC resume button while stationary and a lead is detected."""
-    auto_resume_allowed = CC.enabled and CS.out.cruiseState.standstill
+    # brake guard: CC.enabled now survives a brake press (main-on latch), so
+    # the standstill gate alone would keep pulsing RES under the driver's foot
+    auto_resume_allowed = CC.enabled and CS.out.cruiseState.standstill and not CS.out.brakePressed
 
     if not auto_resume_allowed:
       self.is_sng_check = False
@@ -236,13 +238,24 @@ class CarController(CarControllerBase):
     overridden while engaged, ACC_HUD/ACC_AEB are pure echoes. The stock radar
     keeps owning the session on bus 2, so cruiseState and cancel semantics are
     untouched; the firmware blocks the stock frames bus2->bus0 while the
-    LONGITUDINAL safety flag is set."""
+    LONGITUDINAL safety flag is set.
+
+    Session gate: with the main-on arm latch (carstate) and the panda's
+    matching acc_main_on widening, controls_allowed stays up through brake
+    cancels and CANCEL standby - permission alone no longer implies a live
+    session. AccControlActive on the radar's own bus-2 frame is the session
+    truth: while it is down (brake cancel / CANCEL / bounce) or the driver is
+    braking, OP re-broadcasts the radar frame verbatim instead of commanding.
+    OP recovers the frame the session comes back (stock auto-resume on brake
+    release, RES after CANCEL) - no state churn, no holes."""
     if self.frame % 2 == 0:
       raw_cnt = (self.frame // 2) % 16
       # resume pulse while long control is starting (standstill -> go)
       resume = CC.actuators.longControlState == LongCtrlState.starting
+      session_active = bool(CS.radar_acc_msg.get("AccControlActive", 0))
+      long_active = CC.longActive and not CS.out.brakePressed and session_active
       can_sends.append(bydcan.create_accel_command(
-        self.packer, CC.actuators.accel, CC.enabled, CC.longActive, resume,
+        self.packer, CC.actuators.accel, CC.enabled, long_active, resume,
         CS.radar_acc_msg, raw_cnt))
       if CS.adas_msg:
         can_sends.append(bydcan.create_acc_hud_command(self.packer, CS.adas_msg, raw_cnt))

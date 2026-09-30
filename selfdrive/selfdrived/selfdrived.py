@@ -226,8 +226,20 @@ class SelfdriveD(CruiseHelper):
           self.events.add(EventName.pcmEnable)
 
       # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
+      # BYD: the brake is not a disengage. cruiseState.enabled tracks the ACC
+      # main posture (byd carstate), which the brake does not drop - a
+      # pedalPressed here would soft-disable the longitudinal state machine
+      # after 3 s with no rising edge left to recover it, and the MADS lateral
+      # would die with the session churn the main latch exists to absorb.
+      # Yielding is handled downstream instead: longitudinal via the
+      # controller's session/brake gate, lateral via lkas_brake_inhibit.
+      # Consequence: MadsSteeringMode PAUSE/DISENGAGE never fire on BYD (they
+      # key on this event) - REMAIN_ACTIVE is the only supported mode.
+      brake_disables = CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)
+      if self.CP.brand == 'byd':
+        brake_disables = False
       if (CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator) or \
-        (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
+        brake_disables or \
         (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill)):
         self.events.add(EventName.pedalPressed)
 

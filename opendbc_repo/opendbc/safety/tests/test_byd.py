@@ -14,6 +14,59 @@ class BydButtonTestBase:
   # only the LKAS (0x316) and angle (0x1E2) control frames. See byd_fwd_hook.
   FWD_BLACKLISTED_ADDRS = {0: [0x1E2, 0x316], 2: [0x1E2, 0x316]}
 
+  # BYD_ACC_MAIN_FALL_HOLD in byd.h, plus margin
+  MAIN_FALL_HOLD_FRAMES = 65
+
+  def _rx_main_off(self):
+    """Sustained ACC main-off: past the fall hold, so acc_main_on actually
+    drops and the pcm/mads edge machinery sees a genuine main-off."""
+    for _ in range(self.MAIN_FALL_HOLD_FRAMES):
+      self._rx(self._pcm_status_msg(False))
+
+  # The main fall hold means a SINGLE main-off frame no longer cancels -
+  # cruise status keeps reading engaged through the hold. Override the three
+  # generic pcm tests to drive a sustained main-off where they assert the drop.
+  def test_enable_control_allowed_from_cruise(self):
+    self._rx_main_off()
+    self.assertFalse(self.safety.get_controls_allowed())
+    self._rx(self._pcm_status_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+
+  def test_disable_control_allowed_from_cruise(self):
+    self.safety.set_controls_allowed(1)
+    self._rx_main_off()
+    self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_cruise_engaged_prev(self):
+    for engaged in [True, False]:
+      self._rx(self._pcm_status_msg(engaged))
+      self.assertEqual(engaged, self.safety.get_cruise_engaged_prev())
+      self._rx_main_off()
+      self.assertFalse(self.safety.get_cruise_engaged_prev())
+
+  def test_main_survives_short_drop(self):
+    # the camera's ~2 s main glitches must not kill actuation permission:
+    # a burst of main-off frames shorter than the hold keeps acc_main_on up
+    # (hold = 60 frames; the 60th drop frame is the first to let go)
+    self._rx(self._pcm_status_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+    for _ in range(59):
+      self._rx(self._pcm_status_msg(False))
+      self.assertTrue(self.safety.get_controls_allowed())
+    self._rx(self._pcm_status_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+
+  def test_standby_posture_is_main_on(self):
+    # AccState=1 (standby, also the ignition-leftover posture) + AccOn1=1 is
+    # MAIN-ON now: longitudinal actuation permission stays up through brake
+    # cancel / CANCEL standby - the session gate lives in the OP controller
+    self.safety.set_controls_allowed(False)
+    self._rx_main_off()
+    self.assertFalse(self.safety.get_controls_allowed())
+    values = {"AccState": 1, "AccOn1": 1}
+    self._rx(self.packer.make_can_msg_panda("ACC_HUD_ADAS", 2, values))
+    self.assertTrue(self.safety.get_controls_allowed())
+
   def test_resume_buttons(self):
     # BTN_AccUpDown_Cmd=3 (UP_RESETSPEED) spoof is only allowed while stationary
     for stationary in (True, False):
@@ -81,10 +134,11 @@ class TestBydSafetyTorque(BydButtonTestBase, common.PandaCarSafetyTest, common.D
     return self.packer.make_can_msg_panda("ACC_EPS_STATE", 0, values)
 
   def _pcm_status_msg(self, enable):
-    # Song engagement encoding (route-verified): AccState 2/3/5 are the
-    # engaged-only states; 1 is an ambiguous standby that must read as NOT
-    # engaged (it also appears at ignition and after a brake cancel)
-    values = {"AccState": 3 if enable else 1}
+    # ACC MAIN posture (route-verified): enable = engaged session frame
+    # (AccState=3, AccOn1=1); disable = true main-off (AccState=0, AccOn1=0).
+    # AccState=1 + AccOn1=1 would be MAIN-ON standby, NOT an off (it also
+    # shows up at ignition and after a brake cancel).
+    values = {"AccState": 3 if enable else 0, "AccOn1": 1 if enable else 0}
     return self.packer.make_can_msg_panda("ACC_HUD_ADAS", 2, values)  # camera side is bus 2
 
   def _speed_msg(self, speed):
@@ -142,10 +196,11 @@ class TestBydSafetyAngle(BydButtonTestBase, common.PandaCarSafetyTest, common.An
     return self.packer.make_can_msg_panda("EPS", 0, values)
 
   def _pcm_status_msg(self, enable):
-    # Song engagement encoding (route-verified): AccState 2/3/5 are the
-    # engaged-only states; 1 is an ambiguous standby that must read as NOT
-    # engaged (it also appears at ignition and after a brake cancel)
-    values = {"AccState": 3 if enable else 1}
+    # ACC MAIN posture (route-verified): enable = engaged session frame
+    # (AccState=3, AccOn1=1); disable = true main-off (AccState=0, AccOn1=0).
+    # AccState=1 + AccOn1=1 would be MAIN-ON standby, NOT an off (it also
+    # shows up at ignition and after a brake cancel).
+    values = {"AccState": 3 if enable else 0, "AccOn1": 1 if enable else 0}
     return self.packer.make_can_msg_panda("ACC_HUD_ADAS", 2, values)  # camera side is bus 2
 
   def _speed_msg(self, speed):
@@ -213,10 +268,11 @@ class TestBydSafetyLong(BydButtonTestBase, common.PandaCarSafetyTest, common.Dri
     return self.packer.make_can_msg_panda("ACC_CMD", 0, values)
 
   def _pcm_status_msg(self, enable):
-    # Song engagement encoding (route-verified): AccState 2/3/5 are the
-    # engaged-only states; 1 is an ambiguous standby that must read as NOT
-    # engaged (it also appears at ignition and after a brake cancel)
-    values = {"AccState": 3 if enable else 1}
+    # ACC MAIN posture (route-verified): enable = engaged session frame
+    # (AccState=3, AccOn1=1); disable = true main-off (AccState=0, AccOn1=0).
+    # AccState=1 + AccOn1=1 would be MAIN-ON standby, NOT an off (it also
+    # shows up at ignition and after a brake cancel).
+    values = {"AccState": 3 if enable else 0, "AccOn1": 1 if enable else 0}
     return self.packer.make_can_msg_panda("ACC_HUD_ADAS", 2, values)  # camera side is bus 2
 
   def _speed_msg(self, speed):

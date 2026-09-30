@@ -73,6 +73,16 @@ class ModularAssistiveDrivingSystem:
     return True
 
   def block_unified_engagement_mode(self) -> bool:
+    # BYD: MADS survives brake/session drops now (the ACC main-on latch in
+    # carstate keeps cruiseState.enabled up through them), so the re-engage
+    # block below ("MADS already enabled -> drop pcmEnable") would lock the
+    # longitudinal state machine out until the driver cycles ACC main.
+    # Longitudinal re-engagement rides on the pcmEnable edge the latch
+    # produces at the stock ACC's auto-resume / RES, and session standby
+    # produces no edge at all - pcmEnable must always reach the state machine.
+    if self.CP.brand == "byd":
+      return False
+
     # UEM disabled
     if not self.unified_engagement_mode:
       return True

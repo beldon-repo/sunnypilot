@@ -28,8 +28,12 @@ class CarInterface(CarInterfaceBase):
 
     # longitudinal control is done by the stock ACC; openpilot only does
     # lateral control plus spoofed resume button for auto-resume from standstill.
-    # pcmCruise ties openpilot's engagement to the stock ACC state (like the
-    # Geely port): OP enables on the rising edge of cruiseState.enabled.
+    # pcmCruise ties openpilot's engagement to the ACC main posture (like the
+    # Geely port): cruiseState.enabled is the arm latch (debounced main-on +
+    # one genuine session this drive, see carstate) - OP enables on its rising
+    # edge and only drops it when the driver turns ACC off. Brake and session
+    # standby deliberately do not disengage; the longitudinal output is gated
+    # on the live radar session in the controller instead.
     ret.openpilotLongitudinalControl = False
     ret.pcmCruise = True
     ret.autoResumeSng = True
