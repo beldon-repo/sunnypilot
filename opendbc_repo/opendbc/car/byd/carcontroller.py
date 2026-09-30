@@ -110,10 +110,15 @@ class CarController(CarControllerBase):
     # (route 7--12e), and our own c-gated build streamed pure idle for two
     # full drives (route 0000000d) because the EPS only raises the bit AFTER
     # accepting a session we never sent - a deadlock. So: stream the session
-    # and let the EPS activate when it decides (driver hands being the
-    # dominant observable); what keeps the waiting phase safe is the bounded
-    # request above and arming only at hands-light moments
-    # (STEER_ARM_DRV_TORQUE, root cause 15).
+    # and let the EPS activate when it decides; what keeps the waiting phase
+    # safe is the bounded request above. The old hands-light arm gate
+    # (STEER_ARM_DRV_TORQUE, root cause 15) is GONE: routes 1d/1e 2026-09-30
+    # measured it vetoing re-arms for 1.5-4.5 s after every brake release and
+    # every cancel+re-SET while the driver was steering (drv 83-182), which
+    # the driver read as "no assist until I press RES" - pressing RES only
+    # worked because the hand leaves the wheel to reach the stalk (t=162.48:
+    # re-armed with no button press). The vendor arms at any hands state and
+    # was never latched doing it; the request envelope is the protection.
 
     # hard stops - declared by the driver or the EPS itself. The vendor has
     # no others: it arms at zero request, fights heavy driver torque, and
@@ -154,13 +159,13 @@ class CarController(CarControllerBase):
           if CC.latActive and not CS.torque_failed and not CS.steer_error:
             self.retry_burst = 3
     else:
-      if allow and abs(drv) < CarControllerParams.STEER_ARM_DRV_TORQUE:
+      if allow:
         # engage/retry burst: 3 frames of ReqPrepare with lanes 2/2, request
-        # 0, then activate. No ack wait - the burst itself is the handshake.
-        # The arm also waits for hands-light (STEER_ARM_DRV_TORQUE): every
-        # vendor engage lands at a hands-light moment, and arming against a
-        # held wheel is root cause 15 / the route 0000000a third-strike
-        # TorqueFailed latch (err=2 -> err=4 with the driver yanking +210).
+        # 0, then activate. No ack wait - the burst itself is the handshake,
+        # and no hands wait either (the route 0000000a / 909633 latches that
+        # motivated the gate predate the session-architecture rewrite: its
+        # rail and oscillation sources are structurally gone, and the vendor
+        # arms at any hands state - see the comment block above).
         lkas_req_prepare = 1
         if self.retry_burst == 0:
           self.retry_burst = 3
