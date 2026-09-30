@@ -35,9 +35,18 @@
 **"多次重新进入"的解释**：每次取消→重 SET 只造一次边沿；前几次失败 = 撞 selfdrived
 就绪窗口（点火后 ~15s，ops 文档 §三.2 已知）。就绪后的重进一次即成功。
 
-**修复候选（v3-1，不碰 EPS 面向行为）**：boot 时检测 ACC 已 engaged → selfdrived 就绪后
-合成一次 pcmEnable。守卫：vEgo > minSteerSpeed、无刹车、手轻（|drv| < STEER_ARM_DRV_TORQUE）、
-enabled 已稳定 ≥N 秒。最低成本替代：把"取消 → 等 3s → 重 SET"写进用户规程（现状 workaround）。
+**修复候选（v3-1，不碰 EPS 面向行为）——✅ 已实现（见 `selfdrive/car/car_specific.py` BYD 分支
+`BOOT_ENGAGE_STEADY_TIME`）**：stock ACC 的严格 latch（AccControlActive 基）连续保持 ≥3s 且 OP
+仍未 enabled → 补发一次 pcmEnable。设计要点：
+- **所有 NO_ENTRY 门照常**（gear/door/标定/故障）——只恢复"司机意图边沿"，不绕任何检查；
+  就绪窗口（NO_ENTRY）期间的补发**不消耗**，每帧重试直到门清（单测覆盖）。
+- **手轻不要求**（与真 SET 按压对齐；手轻由 EPS 武装门 `STEER_ARM_DRV_TORQUE` 在会话层管）；
+  standstill 同理允许（controller 侧 standstill 本就挡武装）。
+- **自限**：CC.enabled 一旦 True 永不再发（真边沿激活→合成器永久退役；之后的取消/重 SET
+  走真边沿，不自动重engage）。
+- 单测：`selfdrive/car/tests/test_car_specific.py` 5 场景（steady 时序/无 ACC/刹车重置/
+  NO_ENTRY 重试/真 enable 后退役），本地 `pytest --noconftest -c /dev/null`（arm-only .so
+  需 stub，见测试文件头）。待实车复验：boot 时 ACC 已开 → 就绪后 ~3s 应自动出绿框。
 
 ## 三、症状 1：绿框早、控车晚 = 三层延迟叠加（第 1 段）
 
