@@ -49,6 +49,12 @@ class CarInterface(CarInterfaceBase):
     # cruiseState/pcm_cruise_check - so the engage chain above is unchanged and
     # no reflash is needed to toggle: the firmware keys its extra TX whitelist,
     # accel checks and 0x32D/E/F forward block off the LONGITUDINAL safety flag.
+    # Declare availability: without this flag selfdrived deletes
+    # AlphaLongitudinalEnabled at every startup and exp_button locks the onroad
+    # toggle ("stock ACC is used" message). Running the param on firmware
+    # predating the longitudinal port (fw_base fee17db6) is instead caught by
+    # the safetyTxBlocked watchdog (bydLongFirmwareMissing, M1).
+    ret.alphaLongitudinalAvailable = True
     if alpha_long:
       ret.openpilotLongitudinalControl = True
       ret.safetyConfigs[0].safetyParam |= int(BydSafetyFlags.LONGITUDINAL)

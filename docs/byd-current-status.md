@@ -98,18 +98,23 @@ err 不升级、armed 时段 72-84% EPS 真执行——死锁/锁存史上的 10
 1. **静态**：启动后 `pandaState.safetyParam=2`（byd@35+LONGITUDINAL）、全程无
    `bydLongFirmwareMissing`/controlsMismatch；bus0 只见 OP 重播的 0x32D/E/F（fwd 挡生效：
    每地址 bus0 无双重源，src128 环回计数≈3×50Hz 与 CC 周期一致）。
-2. **进入链**：main-on 武装 → engage；跟车时 0x32E 的 `AccControlActive=1`+AccelCmd=OP 值
+2. **开关前提**：OTA 到含 `ret.alphaLongitudinalAvailable = True` 的提交后，UI 的
+   "openpilot Longitudinal Control (Alpha)" 与行驶中 EXP 门才会放行——此前 BYD 端口
+   未声明可用性，selfdrived 启动即删 `AlphaLongitudinalEnabled`、exp_button 恒提示
+   "使用自带的 ACC 纵向控制"（alpha_long 分支实际是死代码；声明后若固件未刷，
+   M1 看门狗 `bydLongFirmwareMissing` 会明确拦截而不是静默失效）。
+3. **进入链**：main-on 武装 → engage；跟车时 0x32E 的 `AccControlActive=1`+AccelCmd=OP 值
    （限速 [-4,2] m/s²，raw 20–140）；减速度/加速请求与 controlsd 输出一致（对照
    carControl.actuators.accel）。
-3. **让位**：踩刹车 → python 闸门回 echo（ACA=0，按雷达帧透传），车按原厂减速；松刹
+4. **让位**：踩刹车 → python 闸门回 echo（ACA=0，按雷达帧透传），车按原厂减速；松刹
    原厂自动 resume（~40ms 带内）；**横向全程不掉**（main-on 生命周期，§三）。
-4. **SNG**：停车跟停后 standstill→起步走 `LongCtrlState.starting` 脉冲
+5. **SNG**：停车跟停后 standstill→起步走 `LongCtrlState.starting` 脉冲
    ResumeFromStandstill（厂商无此数据样本，首测重点观察起步平顺/迟滞）。
-5. **取消/退出**：CANCEL→需 RES；main-off→纵向横向全退（唯一主动退出路径）；EPS/故障
+6. **取消/退出**：CANCEL→需 RES；main-off→纵向横向全退（唯一主动退出路径）；EPS/故障
    硬停在档。
-6. **AEB 通道**：确认 0x32F 心跳回声正常、原厂 AEB/ESP 介入不被本移植遮挡
+7. **AEB 通道**：确认 0x32F 心跳回声正常、原厂 AEB/ESP 介入不被本移植遮挡
    （`byd-control-deep-review.md` 风险 3"纵向拦原厂制动"实车核验项）。
-7. **观察项**：`long_lifecycle.py` 时间线复用到纵向（OP-OFF/recovery 全帧），
+8. **观察项**：`long_lifecycle.py` 时间线复用到纵向（OP-OFF/recovery 全帧），
    ACC bounce 风暴期 0x32E 输出连续性（对照 §四 复验报告）。
 
 ### C. 遗留工程（实车干净后再动）
