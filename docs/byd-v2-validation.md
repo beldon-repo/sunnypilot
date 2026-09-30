@@ -4,7 +4,8 @@
 > 设备 GitCommit=`9a46d312e4`（根因 16 v2 = `51b1a25a5f` 在跑），固件 fec63fda。
 > 配置：`AlphaLongitudinalEnabled` 参数不存在 = **OFF（纵向 = 原车 ACC）**；NNLC=ON（未标定）。
 > rlog + 分析脚本存档：`docs_site/byd_v2_validation/`（gitignore，本地保存）。
-> 状态：v2 核心目标全部达成；新发现 4 项待拍板（§六）。最后更新：2026-09-30。
+> 状态：v2 核心目标全部达成；部署路测完成（§八：症状2 数据实证修复、NNLC 排除、4s 接管延迟分解）。
+> 最后更新：2026-09-30（含 §八 部署路测）。
 
 ## 一、v2 核心验证结论（对照 `byd-control-lessons.md` §五决策树）
 
@@ -122,12 +123,12 @@ NNLC 关/开 A/B 再上 governor，避免两个变量混在一个路测里。
 
 | # | 项 | 改动面 | 说明 |
 |---|---|---|---|
-| 1 | NNLC A/B（先关 NN 跑一段基线） | param，无代码 | 振荡的第一嫌疑人；C-4 已列，现在有了实车证据 |
-| 2 | 振荡杠杆：yysnet 转角速率 governor（param 默认关）或厂商 EMA | 控制行为 | §五决策树第二行已触发；可能连带消 ACC bounce |
-| 3 | boot-engage（症状 2） | engage 链 | 非控制行为；守卫见 §二；或维持规程 workaround |
-| 4 | 等待相位 windup 抑制（c=0 时冻结/衰减 demand） | 控制行为 | 与 v2"stream and wait"有交互，需设计：参考厂商"几乎不积分全靠前馈"的环形态 |
-| 5 | 0x316 流空洞（§四修复方向 c→a） | 视复测结果 | 上游（1/2）修复后复测，仍出现再动 controller/固件 |
-| 6 | STEER_THRESHOLD 标定 | 参数 | ops 文档说 60-70、deep-review 说提到轻握带之上（≈150-160），**两说冲突**，需按本车 drv 分布定（本次数据：轻握样本 60-160+） |
+| 1 | ~~NNLC A/B~~ | — | **✅ 结案（§八.3）**：NNLC=OFF 基线下振荡/bounce/MT 热全部复现 → NNLC 排除 |
+| 2 | 振荡杠杆：yysnet 转角速率 governor（param 默认关）或厂商 EMA | 控制行为 | **升级为第一优先**（§八.3：NNLC 排除后，根源在 stock 扭矩环+我方前馈） |
+| 3 | ~~boot-engage（症状 2）~~ | — | **✅ 结案（§八.1）**：`d4160fd` BOOT_LATCH_HOLD 路测+帧级数据双确认，自动接车 16.3s |
+| 4 | 等待相位 windup 抑制（c=0 时冻结/衰减 demand） | 控制行为 | 4s 接管延迟的第二层风险（§八.2：wait 中 rail 200 仍在，两个 7s 案例） |
+| 5 | 0x316 流空洞（§四修复方向 c→a） | 视复测结果 | 仍贴线：最长 0.45s vs 锁存带 0.48-0.72s（§八.3），上游（2/4）修复后复测 |
+| 6 | STEER_THRESHOLD 标定 | 参数 | 4s 接管延迟的第一层（§八.2：手扶盘武装延迟 0.8-2.3s，轻握带 60-160 再确认） |
 
 纪律提醒：2/4/5 触碰控制行为，逐项拍板、单项路测（勿多项同改——根因 14-16 的教训）。
 
@@ -162,3 +163,69 @@ CANParser 按 `src==bus` 过滤（`parser.py:221`），跨 src 同址帧（0x316
 重新拉取：`ssh comma@192.168.31.44 -i ~/Documents/op/menmen.key
 "cat /data/media/0/realdata/<route>--<seg>/rlog.zst" > <route>_<seg>.zst`
 （本地文件名含 `-` 会让 logreader 误判路由名，存成 `r{route}_{seg}.zst`。）
+
+## 八、部署路测：v2 修复上车复验（route 10/11/12，NNLC=OFF；2026-09-30）
+
+> 数据：2026-09-30 午间两段路测 + 15s 残段。route `00000011`（5 seg，323s）+ `00000012`
+> （4 seg，222s）+ `00000010`（15s，未完成起步）。设备 GitCommit=`d4160fd`
+> （症状2 修复 BOOT_LATCH_HOLD 上车）。**NNLC=OFF（用户关后开车，两次均确认）。**
+> rlog/qlog/swaglog 存档：`docs_site/byd_roadtest_2026-09-30/`（gitignore，md5 20/20 校验）。
+> 用户体感：整体效果偏好；症状2 已修复；重新开 ACC 后 ~4s 才接管（下文逐一对应）。
+
+### 1. 症状2 = ✅ 数据实证（帧级，route 12 seg0）
+
+ACC 开着上车 → 设备启动，全程无按键：
+
+```
+1.30s  ACA=1（雷达 ACC 真活跃） latch=0（hold 压住） op=0 | EPS c=1（boot 前旧会话）
+7.66s  EPS 旧会话 c→0（退场），ACA 仍 1，latch 仍 0（压住中）
+16.28s latch 0→1（hold 到期放行，真边沿）→ op 同帧 enabled → lat=1
+16.37s burst P=1 → A=1 armed（out=16）—— engage 后 0.09s
+20.36s EPS c=1（+4.08s 等待相位）
+```
+
+生效时长 16.28−1.3 ≈ **15s，与 BOOT_LATCH_HOLD_TIME 一致**。两路由
+ACC-on-OP-off >2s 长段 = **0**（v2 route f 为 20.6s）。症状2 结案。
+
+### 2. "重开 ACC ~4s 才接管" = 三层分解确认（18 次 engage 逐事件时序）
+
+| 层 | 环节 | 本次实测（NNLC=OFF） | v2（e/f） | 厂商 |
+|---|---|---|---|---|
+| ① | engage→armed（手轻武装门） | 手扶盘（pressed=1）0.82-2.29s（5 例）；手离开 <0.1s | 0.6-3.2s / 0.02-0.06s | — |
+| ② | armed→EPS c=1（等待相位） | 干净 boot 4.08s；重 SET 0-7.7s；**两个 7s 案例均邻 bounce** | 0.2-1.1s 常态，max 2.8s | max 2.86s（415 帧） |
+| ③ | 等待期 windup | r11 212.33s wait 中 out rail 200；弯道 out ±170 拉锯 | rail 200（包络封顶） | ≤193 从不 rail |
+
+engage→EPS c=1 全程 1.6-7.7s、中位 ~4.2s = 用户"4 秒左右"✓。要点：
+- 两个 6.7/7.7s 案例（210.4s / 230.1s）帧级：armed 后 out 恒 16，EPS 握 `LKAS_Prepared=1`
+  不放、c 迟迟不翻——**EPS 显然不等 out 幅值**；激活条件仍未逆向
+  （eps-reference §11.7：手轻主导但有例外）。等待期越长，③ 的 windup 越肥。
+- 另有 bounce 假取消→enable 抖动加重感知（r11 99.8-100.2s 0.4s 内 3 次 enable 边沿）。
+- 杠杆对应：① → 拍板 #6（STEER_THRESHOLD）；③ → #4（windup 冻结）；感知抖动 → bounce 修复。
+
+### 3. NNLC=OFF 基线 = 振荡/bounce/MT 热全部复现 → NNLC 排除（拍板 #1 结案）
+
+| 指标 | v2（e/f，"NNLC=ON"） | 本次（11/12，NNLC=OFF） | 厂商 |
+|---|---|---|---|
+| armed 转角速率 p90 / p99 / max | 96-160 / 272-288 / 464 | **208-240 / 464-800 / 960-1488** | — |
+| \|MT\| p50 / p90 / max | 61-73 / 159-180 / 200 | 60-63 / 166-200 / 200 | 52 / 115 / 193 |
+| ACA bounce | 16 次（16/16 在 armed） | 10 次（r11 8 + r12 2；3 次在 op-on，其余 armed 帧） | 0 |
+| 0x316 空洞最长 | 21 帧 / 0.42s | **25 帧 / 0.45s**（r12 169.2s，bounce 后 40ms） | 0 |
+| sign flips | 坐实（直道 ±50） | 仍在（r11 126.1s：ang≈-5°，out -29↔+33 /0.5s） | — |
+
+- **NNLC 不是振荡/MT 热的根源**——OFF 下全部复现，转角速率尾段反而更差
+  （弯道需求拉锯 + windup 释放：r12 108-112s 弯道 out -183↔+31）。
+- caveat：e/f 侧 NNLC 是否真生效，日志 `lateralTorqueState.error/f` 分布呈 stock 路径特征
+  （lataccel 量级 ≤0.94，非扭矩空间），无法强确证；但两种解读结论一致：
+  **振荡根源在 stock 扭矩环+我方前馈，不在 NNLC** → 拍板 #2 升第一优先。
+- bounce→enable 抖动→0x316 空洞链条完整存活：空洞全部与 bounce 相邻
+  （±40ms 内），最长 0.45s vs armed-零锁存带 0.48-0.72s——仍贴线（拍板 #5 维持"上游修完再复测"）。
+
+### 4. 数据备忘
+
+- route 11 前 3 seg / route 12 seg0 录制时设备时钟未同步（mtime 显示 2025-07-02），
+  logMonoTime 为开机相对时（route 基准 83.1s/84.3s）；分析用段内相对时即可。
+- route 11/12 各自末段尾带 corrupted tail（logger 未收尾，设备端固有，非拉取损伤）；
+  `q00000012_3.zst` 设备端即空（rlog 完整，无影响）。
+- `exec_stats` 的 armed 计数含 CANParser stale 高估（只看相对占比）；MT 分布不受影响。
+- 脚本沿用 `docs_site/byd_v2_validation/scripts/`，副本在本目录 `scripts/`
+  （`analyze_engage.py` 已改路径）。
