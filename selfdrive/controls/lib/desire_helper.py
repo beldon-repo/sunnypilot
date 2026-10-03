@@ -1,5 +1,6 @@
 from cereal import log, custom
 from openpilot.common.constants import CV
+from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeController, AutoLaneChangeMode
 from openpilot.sunnypilot.selfdrive.controls.lib.lane_turn_desire import LaneTurnController
@@ -7,6 +8,11 @@ from openpilot.sunnypilot.selfdrive.controls.lib.lane_turn_desire import LaneTur
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 
+# Default turn-signal lane change speed threshold, overridable at runtime by the
+# LaneChangeAssistSpeed param (MPH, vendor dp_lat_lane_change_assist_speed port,
+# docs/byd-lane-change.md §三). 0 disables the assist state machine entirely -
+# the assist-less yield mode (sunnypilot assist_less_lane_change) then owns the
+# blinker+steer-input case by releasing CC.latActive for a manual lane change.
 LANE_CHANGE_SPEED_MIN = 20 * CV.MPH_TO_MS
 LANE_CHANGE_TIME_MAX = 10.
 
@@ -50,13 +56,34 @@ class DesireHelper:
     self.alc = AutoLaneChangeController(self)
     self.lane_turn_controller = LaneTurnController(self)
     self.lane_turn_direction = custom.TurnDirection.none
+    self.params = Params()
+    self.param_read_counter = 0
+    self.lane_change_assist_speed_ms = LANE_CHANGE_SPEED_MIN
+    self.read_params()
+
+  def read_params(self) -> None:
+    try:
+      speed_mph = int(self.params.get("LaneChangeAssistSpeed", return_default=True))
+    except (TypeError, ValueError):
+      # prebuilt params lib without the key: keep stock behavior
+      speed_mph = int(LANE_CHANGE_SPEED_MIN / CV.MPH_TO_MS)
+    # inf on 0: every frame reads as "below threshold" so the assist state machine
+    # stays off at any speed (vendor's disable intent; their un-decrypted DesireHelper
+    # wrapper semantics can't be inspected, docs/byd-lane-change.md §三)
+    self.lane_change_assist_speed_ms = speed_mph * CV.MPH_TO_MS if speed_mph > 0 else float("inf")
+
+  def update_params(self) -> None:
+    if self.param_read_counter % 50 == 0:
+      self.read_params()
+    self.param_read_counter += 1
 
   def update(self, carstate, lateral_active, lane_change_prob):
     self.alc.update_params()
     self.lane_turn_controller.update_params()
+    self.update_params()
     v_ego = carstate.vEgo
     one_blinker = carstate.leftBlinker != carstate.rightBlinker
-    below_lane_change_speed = v_ego < LANE_CHANGE_SPEED_MIN
+    below_lane_change_speed = v_ego < self.lane_change_assist_speed_ms
 
     # Lane turn controller update
     self.lane_turn_controller.update_lane_turn(blindspot_left=carstate.leftBlindspot, blindspot_right=carstate.rightBlindspot,

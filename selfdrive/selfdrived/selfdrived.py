@@ -27,6 +27,7 @@ from openpilot.system.version import get_build_metadata
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
+from openpilot.sunnypilot.selfdrive.controls.lib.assist_less_lane_change import AssistLessLaneChange
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 
 REPLAY = "REPLAY" in os.environ
@@ -170,6 +171,11 @@ class SelfdriveD(CruiseHelper):
     self.events_sp_prev = []
 
     self.mads = ModularAssistiveDrivingSystem(self)
+
+    # Vendor assist-less lane change (docs/byd-lane-change.md §四). Second instance of
+    # the same latch the controlsd_ext runs to release latActive - events must be
+    # produced here; identical carState inputs converge the two within one frame.
+    self.assist_less_lane_change = AssistLessLaneChange()
 
     self.car_events_sp = CarSpecificEventsSP(self.CP, self.params)
 
@@ -324,6 +330,12 @@ class SelfdriveD(CruiseHelper):
           self.events.add(EventName.preLaneChangeRight)
     elif self.sm['modelV2'].meta.laneChangeState in (LaneChangeState.laneChangeStarting,
                                                     LaneChangeState.laneChangeFinishing):
+      self.events.add(EventName.laneChange)
+
+    # Vendor assist-less lane change: same "Changing Lanes" display while the driver
+    # steers the lane change manually (latActive release runs on the controlsd side
+    # with the identical latch). No-op while the assist mode is enabled.
+    if self.assist_less_lane_change.update(CS):
       self.events.add(EventName.laneChange)
 
     # Handle lane turn
@@ -639,6 +651,7 @@ class SelfdriveD(CruiseHelper):
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
 
       self.mads.read_params()
+      self.assist_less_lane_change.read_params()
       time.sleep(0.1)
 
   def run(self):

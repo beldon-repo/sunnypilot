@@ -12,6 +12,7 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.selfdrive.controls.lib.param_store import ParamStore
 from openpilot.sunnypilot.selfdrive.controls.lib.blinker_pause_lateral import BlinkerPauseLateral
+from openpilot.sunnypilot.selfdrive.controls.lib.assist_less_lane_change import AssistLessLaneChange
 
 
 class ControlsExt:
@@ -19,6 +20,7 @@ class ControlsExt:
     self.CP = CP
     self.params = params
     self.blinker_pause_lateral = BlinkerPauseLateral()
+    self.assist_less_lane_change = AssistLessLaneChange()
     self.param_store = ParamStore(self.CP)
     self.get_params_sp()
 
@@ -32,9 +34,16 @@ class ControlsExt:
   def get_params_sp(self) -> None:
     self.param_store.update(self.params)
     self.blinker_pause_lateral.get_params()
+    self.assist_less_lane_change.read_params()
 
   def get_lat_active(self, sm: messaging.SubMaster) -> bool:
     if self.blinker_pause_lateral.update(sm['carState']):
+      return False
+
+    # Vendor assist-less lane change (LaneChangeAssistSpeed=0): release lateral for a
+    # driver-steered lane change. Before the MADS branch so it wins in every mode,
+    # matching the vendor's unconditional CC.latActive=False.
+    if self.assist_less_lane_change.update(sm['carState']):
       return False
 
     ss_sp = sm['selfdriveStateSP']
