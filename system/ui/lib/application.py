@@ -18,7 +18,7 @@ from typing import NamedTuple
 from importlib.resources import as_file, files
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import HARDWARE, PC
-from openpilot.system.ui.lib.multilang import multilang
+from openpilot.system.ui.lib.multilang import TRANSLATIONS_DIR, multilang
 from openpilot.common.realtime import Ratekeeper
 
 from openpilot.system.ui.sunnypilot.lib.application import GuiApplicationExt
@@ -90,6 +90,16 @@ FONT_SCALE = 1.242 if BIG_UI else 1.16
 ASSETS_DIR = files("openpilot.selfdrive").joinpath("assets")
 FONT_DIR = ASSETS_DIR.joinpath("fonts")
 
+EXTRA_FONT_CHARS = "–‑✓×°§•X⚙✕◀▶✔⌫⇧␣○●↳çêüñ–‑✓×°§•€£¥"
+# Vector CJK fallback, backport of upstream #36514. Loaded at runtime (not baked into a .fnt
+# atlas) so the fonts directory can stay free of build-time CJK processing. 96px rasterization
+# covers our ~600-glyph zh subset while staying well within texture memory on device.
+NOTO_FONTS = {
+  "zh-CHS": "NotoSansSC-Regular.ttf",
+  "zh-CHT": "NotoSansSC-Regular.ttf",
+}
+NOTO_FONT_SIZE = 96
+
 
 class FontWeight(StrEnum):
   LIGHT = "Inter-Light.fnt"
@@ -107,7 +117,9 @@ class FontWeight(StrEnum):
 
 
 def font_fallback(font: rl.Font) -> rl.Font:
-  """Fall back to unifont for languages that require it."""
+  """Prefer the vector Noto fallback for Chinese, unifont bitmap for the rest."""
+  if multilang.requires_noto() and font is not gui_app._fonts.get(FontWeight.UNIFONT):
+    return gui_app.noto_font()
   if multilang.requires_unifont():
     return gui_app.font(FontWeight.UNIFONT)
   return font
@@ -196,6 +208,7 @@ class MouseState:
 class GuiApplication(GuiApplicationExt):
   def __init__(self, width: int | None = None, height: int | None = None):
     self._fonts: dict[FontWeight, rl.Font] = {}
+    self._fallback_fonts: dict[str, rl.Font] = {}
     self._width = width if width is not None else GuiApplication._default_width()
     self._height = height if height is not None else GuiApplication._default_height()
 
@@ -436,6 +449,10 @@ class GuiApplication(GuiApplicationExt):
       rl.unload_font(font)
     self._fonts = {}
 
+    for font in self._fallback_fonts.values():
+      rl.unload_font(font)
+    self._fallback_fonts = {}
+
     if self._render_texture is not None:
       rl.unload_render_texture(self._render_texture)
       self._render_texture = None
@@ -549,6 +566,31 @@ class GuiApplication(GuiApplicationExt):
   def font(self, font_weight: FontWeight = FontWeight.NORMAL) -> rl.Font:
     return self._fonts[font_weight]
 
+  def noto_font(self) -> rl.Font:
+    """Lazily rasterize a vector Noto CJK subset for the current language."""
+    language = multilang.language
+    if language not in self._fallback_fonts:
+      chars = set(map(chr, range(32, 127))) | set(EXTRA_FONT_CHARS)
+      try:
+        chars.update(TRANSLATIONS_DIR.joinpath(f"app_{language}.po").read_text(encoding="utf-8"))
+      except FileNotFoundError:
+        cloudlog.warning(f"No translation file for language '{language}' when loading Noto fallback")
+
+      codepoints = sorted(map(ord, chars))
+      codepoint_buffer = rl.ffi.new("int[]", codepoints)
+      with as_file(FONT_DIR) as fspath:
+        font = rl.load_font_ex((fspath / NOTO_FONTS[language]).as_posix(), NOTO_FONT_SIZE,
+                               rl.ffi.cast("int *", codepoint_buffer), len(codepoints))
+
+      if font.glyphCount == 0 or font.texture.id == 0:
+        cloudlog.error(f"Failed to load Noto fallback font for {language}, falling back to unifont")
+        return gui_app.font(FontWeight.UNIFONT)
+
+      rl.gen_texture_mipmaps(font.texture)
+      rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_TRILINEAR)
+      self._fallback_fonts[language] = font
+    return self._fallback_fonts[language]
+
   @property
   def width(self):
     return self._width
@@ -592,6 +634,8 @@ class GuiApplication(GuiApplicationExt):
         if font_weight_file != FontWeight.UNIFONT:
           rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
         self._fonts[font_weight_file] = font
+    if multilang.requires_noto():
+      self.noto_font()  # preload so the first Chinese frame doesn't pay rasterization cost
     rl.gui_set_font(self._fonts[FontWeight.NORMAL])
 
   def _set_styles(self):

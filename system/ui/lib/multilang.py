@@ -24,6 +24,13 @@ UNIFONT_LANGUAGES = [
   "ja",
 ]
 
+# Languages rendered with vector Noto CJK fonts instead of the 16px unifont bitmap atlas.
+# zh-CHT shares the SC font: Noto Sans SC covers Traditional codepoints (regional variants differ).
+NOTO_LANGUAGES = [
+  "zh-CHT",
+  "zh-CHS",
+]
+
 
 class Multilang:
   def __init__(self):
@@ -41,6 +48,10 @@ class Multilang:
   def requires_unifont(self) -> bool:
     """Certain languages require unifont to render their glyphs."""
     return self._language in UNIFONT_LANGUAGES
+
+  def requires_noto(self) -> bool:
+    """Chinese uses the vector Noto fallback for crisp glyphs."""
+    return self._language in NOTO_LANGUAGES
 
   def setup(self):
     try:

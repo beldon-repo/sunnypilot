@@ -121,8 +121,8 @@ def main():
   base_cp, unifont_cp = _char_sets()
   fonts = sorted(FONT_DIR.glob("*.ttf")) + sorted(FONT_DIR.glob("*.otf"))
   for font in fonts:
-    if "emoji" in font.name.lower():
-      continue
+    if "emoji" in font.name.lower() or font.name.startswith("NotoSans"):
+      continue  # Noto CJK is rasterized at runtime by gui_app.noto_font(), no baked atlas
     glyphs = unifont_cp if font.stem.lower().startswith("unifont") else base_cp
     _process_font(font, glyphs)
   return 0

@@ -6,11 +6,11 @@ Import('env', 'arch', 'common')
 
 # build the fonts
 generator = File("#selfdrive/assets/fonts/process.py")
-source_files = Glob("#selfdrive/assets/fonts/*.ttf") + Glob("#selfdrive/assets/fonts/*.otf")
+source_files = [f for f in Glob("#selfdrive/assets/fonts/*.ttf") + Glob("#selfdrive/assets/fonts/*.otf")
+                if "NotoColor" not in f.name and not f.name.startswith("NotoSans")]
 output_files = [
   (f.abspath.split('.')[0] + ".fnt", f.abspath.split('.')[0] + ".png")
   for f in source_files
-  if "NotoColor" not in f.name
 ]
 env.Command(
   target=output_files,
