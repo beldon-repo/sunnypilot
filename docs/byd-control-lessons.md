@@ -3,7 +3,7 @@
 > 汇总 2026-09-29/30 对三方实现的代码考古与官方维修手册消化的全部可吸收项。
 > 配套阅读：EPS 协议层规则见 `byd-eps-reference.md`，当前状态见 `byd-current-status.md`。
 > 本文是"候选经验库"：**每项标注吸收状态与触发条件**，动控制行为前先看 §5 决策树与纪律。
-> 最后更新：2026-09-30。
+> 最后更新：2026-10-04（新增 §3.4 MM-X sunnypilot-pc 对照）。
 
 ## 一、资料源清单
 
@@ -14,6 +14,7 @@
 | mouxangithub port | `/Users/wujiafu/Documents/op/mouxangithub/opendbc/opendbc/car/byd/` | 已消化 §3.3 |
 | 官方维修手册（2021 款宋 PLUS DMi）ACC + MPC 分册 | `docs_site/pdf/2021年款比亚迪宋PLUS DMi-01-维修手册-*.txt`（OCR，正文可读） | 已消化 §4 |
 | 官方维修手册 **EPS 分册** | **未获得** —— SteerErrorCode 码表仍缺，搞到即补 | 缺 |
+| MM-X sunnypilot-pc（PC 运行 fork，BYD 在 submodule `MM-X/opendbc-sny`） | `/Users/wujiafu/Documents/op/sunnypilot-pc/opendbc_repo/opendbc/car/byd/`（yysnet 二手拷贝，2025-04~08 冻结） | 已消化 §3.4 |
 | 厂商固件 ELF（带符号） | `docs_site/op_byd`（panda.elf：BYD_STEERING_LIMITS=[300,18,18,…,46]、LOW=[300,9,9,46]、HIGH error=200、ALT=[150,50,50]） | 已入 EPS 参考 §9 |
 
 ## 二、厂商解密代码的发现（最权威参考实现）
@@ -80,6 +81,23 @@ new_steer_pu = np.clip(steer_desire, -self.steerRateLim, self.steerRateLim)
 | counter 首帧对齐车值 | yysnet | 厂商自由递增可行（route 00000037） |
 | 软启动层 | yysnet | 厂商 ramp 即 DELTA 限速；软启动已随旧架构删除（勿复活） |
 | Atto3 角度模式/jerk planner | mouxangithub | 宋走扭矩路径，不涉及 |
+
+### 3.4 MM-X sunnypilot-pc / opendbc-sny（`/Users/wujiafu/Documents/op/sunnypilot-pc/`，2026-10-04 对照）
+
+主体是"openpilot 在 PC 上跑"（metadrive 仿真 + 本地 segments 工具 + uiview）；BYD 部分是
+`feat(car): Sync byd brand from yysnet`（2025-04）的**二手拷贝**，控制行为与 §3.1 同源，**代码无需 merge**。
+但它是第一个可查证的"**同款车已有人控车**"案例，以下按事实/观察项记录：
+
+**事实核**：
+- `Adapter byd BYD_SONG_PLUS_DMI_21`（2025-04-02，子模块 f2c673cc）——**21 款宋 PLUS 有人跑通横向控车**。范围 = 扭矩路径横向 + **原厂 ACC 纵向**（`interface.py: EXP_LONG_CAR` 只含 Han/Tang，Song 的 `openpilotLongitudinalControl=False`）；OP-long 他们没做，我们 Phase2 在前。
+- 他们的 panda `steer_req = LKAS_Active && EPS CruiseActivated`（`safety/modes/byd.h` 0x316 tx check）——**c 门在那台车上可用**。与根因 16（22 款 c 是会话相位标志、合法等待 2.9~7.7s、c 门版本 7218 帧全零死锁）不矛盾，反而提示 **EPS 的 CruiseActivated 行为可能分年款/分固件**。待回问情报：那台车具体年款、上电时序。
+- 他们的坑（勿照抄）：`byd_init` 里 `use_song → byd_platform = TANG_DMI`，`SONG_STEERING_LIMITS` 是永不选中的死代码且注释 `//values to be check`——那台车实际吃的是唐的限速没校验过。
+
+**吸收观察项（只登记，不动行为）**：
+1. **多年款 fingerprints**（`car/byd/fingerprints.py`）：Song Plus DMI 21/23、Song Pro 22、Qin Plus 23、Yuan Plus(Atto3) 22 全量——将来扩年款/社区支持可直接摘，21/23 也可对照我们 22 款验证总线差异。
+2. **fake 0x318 回发 MPC**（`carcontroller.py create_fake_318`）：他们伪造 EPS 状态帧糊住摄像头来消 fault，与我们"echo 摄像头原字段"是两条路线。我们方案已实证，此项仅作备案——若再遇 `check MFC` 类 fault 可对比。
+3. **距离域纵向 jerk 表**（`values.py K_jerk_xp=[4,10,20,40,80]m` + lower/upper 插值，`acc_cmd` 里按 `mrr_leaddist`  interp）：按跟车距离限加加速度——纵向"速率 governor"拍板时的一个输入（我们现为时间域 comfort band）。
+4. **PC 回放环境**：M 芯片 Mac 可直跑 + 本地 segments——与控车无关，但可能替代部分设备端 replay 验证。
 
 ## 四、官方维修手册（ACC + MPC 分册）可吸收项
 
