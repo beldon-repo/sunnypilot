@@ -87,6 +87,25 @@ class CarControllerParams:
   # driver torque for steeringPressed (raw EPS scale: hands-off noise <50,
   # light grip 60-150; the vendor has no equivalent - openpilot-ism)
   STEER_THRESHOLD = 80  # TODO(Song Plus DM-i): calibrate
+  # analog pedal press threshold (signals carry 0.01/unit; >0.01 = one count
+  # of idle noise - see the routes 2d/31 override-flap log). 0.05 = 5 counts.
+  PEDAL_PRESS_THRESHOLD = 0.05
+  # torque-echo divergence guard (root cause 18, routes 28/2b 2026-10): the
+  # two "LKAS Fault" latches were both preceded by the EPS silently aborting
+  # torque (MainTorque -> 0, SteerWarning -> 1, SteerErrorCode still 0,
+  # CruiseActivated still 1) while our request ramped 121->180 open-loop for
+  # 0.4-0.7 s until err=4 + TorqueFailed latched. The vendor's own values
+  # carry exactly this check (STEER_ERROR_MAX=46 vs the EPS MainTorque echo);
+  # we never had it python-side. Stand down when our last applied request
+  # and the EPS echo diverge past it for STEER_ECHO_GUARD_FRAMES command
+  # frames (0.2 s) - real steering lags the request by <=20 counts (win28
+  # trace), a refusing/aborted EPS sits at 0 while demand grows - then hold
+  # the retry STEER_ECHO_RETRY_HOLD_FRAMES (3 s: long enough for the vendor
+  # 0.5 s warning cycle to clear, short enough that a real abort recovers
+  # "within seconds" once the EPS returns; guard B's 6 s hold stays the
+  # outer backstop for the sustained-c=0 case).
+  STEER_ECHO_GUARD_FRAMES = 10
+  STEER_ECHO_RETRY_HOLD_FRAMES = 150
 
   # --- angle path (experimental 482), vendor tables verbatim ---
   ANGLE_RATE_LIMIT_UP = ([5., 10., 15.], [0.5, 2.0, 3.0])
@@ -160,5 +179,12 @@ class CAR(Platforms):
 
 DBC = CAR.create_dbc_map()
 
-# ratio between the wheel speed sensor and the real speed; calibrate from logs
-HUD_MULTIPLIER = 1.0
+# ratio between the wheel speed sensor and the real speed.
+# Measured on the real car, 2026-10-02/03 road tests: GPS vs ESP_SPEED (0x1f0
+# byte 4, "1 km/h/bit") over ~19k one-second samples across 6 boot sessions
+# (0000002a/2b/2c/2d/31/32): true/GPS ratio p50 = 1.112-1.118, flat from
+# 20 to 120 km/h (0-20 and the cluster side aside). The ESP encodes
+# VehicleSpeed at 0.9 km/h per bit, not 1.0 - a raw 65 is 72 km/h true,
+# which is what made "set 65 -> actually ~76 on the cluster" (cluster adds
+# its usual ~+4%). 10/9 corrects vEgo to true speed.
+HUD_MULTIPLIER = 10 / 9

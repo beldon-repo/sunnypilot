@@ -31,6 +31,8 @@ class CarController(CarControllerBase):
     self.conflict_frames = 0  # entry debounce (a momentary demand flip must not flap it)
     self.c0_frames = 0        # B: frames of Active=1 with EPS CruiseActivated=0
     self.c0_hold_frames = 0   # B: re-arm hold after a c0 stand-down
+    self.echo_frames = 0      # C: request-vs-Echo divergence streak (root cause 18)
+    self.echo_hold_frames = 0  # C: re-arm hold after an echo stand-down
 
     # SNG auto-resume state
     self.is_sng_check = False
@@ -129,6 +131,32 @@ class CarController(CarControllerBase):
     elif self.c0_hold_frames > 0:
       self.c0_hold_frames -= 1
 
+    # Guard C - torque-echo divergence (root cause 18, routes 28/2b 2026-10):
+    # the EPS can abort torque mid-session (MainTorque -> 0, SteerWarning -> 1)
+    # while still declaring the session active, and the old guard stack saw
+    # nothing (err stayed 0, c stayed 1). Our loop then integrated error into
+    # a 121->180 open-loop ramp and the EPS answered with err=4 + TorqueFailed
+    # - the exact two "LKAS Fault" drives. The vendor's STEER_ERROR_MAX=46
+    # check (request vs MainTorque echo) is the missing piece: past it for
+    # 0.2 s is "we are demanding, the EPS is NOT delivering" - stand down and
+    # hold the retry 3 s. Live-session steering tracks within ~20 counts of
+    # lag (28/2b clean traces), so 46 has >2x margin. Scoped to c=1 (the EPS
+    # declared it is executing): the vendor's own c=0 WAIT stream carries
+    # requests up to 193 with mt legitimately 0 until acceptance (route
+    # 7--12e, 415 frames) - clipping that would break the handshake, and it
+    # is guard B's domain anyway.
+    echo_err = abs(self.apply_torque_last - int(CS.out.steeringTorqueEps))
+    if self.lkas_active and CS.cruise_activated and abs(self.apply_torque_last) > 15 and \
+       echo_err > CarControllerParams.STEER_ERROR_MAX:
+      self.echo_frames += 1
+      if self.echo_frames >= CarControllerParams.STEER_ECHO_GUARD_FRAMES:
+        self.echo_frames = 0
+        self.echo_hold_frames = CarControllerParams.STEER_ECHO_RETRY_HOLD_FRAMES
+    else:
+      self.echo_frames = 0
+    if self.echo_hold_frames > 0 and not CS.steer_warning:
+      self.echo_hold_frames -= 1
+
     lkas_req_prepare = 0
 
     # The EPS's CruiseActivated bit (0x318 bit1) is its own session-PHASE
@@ -148,7 +176,8 @@ class CarController(CarControllerBase):
     # re-armed with no button press). The vendor arms at any hands state and
     # was never latched doing it; the request envelope is the protection.
 
-    # hard stops - declared by the driver (guard A) or the EPS itself. The
+    # hard stops - declared by the driver (guard A) or the EPS itself (err
+    # bits, SteerWarning, and the guard C echo divergence). The
     # vendor otherwise has none: it arms at zero request, steers parking
     # maneuvers at 37+ deg and 1-17 km/h, and out-authorities the driver
     # WHEN THE EPS IS EXECUTING (-153 vs +166 at c=1) - what 1f showed is
@@ -160,7 +189,8 @@ class CarController(CarControllerBase):
     # brake release disappears entirely.
     allow = CC.latActive and not CS.out.standstill \
       and not CS.torque_failed and not CS.steer_error and not self.conflict \
-      and self.c0_hold_frames == 0
+      and self.c0_hold_frames == 0 \
+      and not CS.steer_warning and self.echo_hold_frames == 0
 
     if self.lkas_active:
       if CS.torque_failed:
@@ -295,8 +325,18 @@ class CarController(CarControllerBase):
       resume = CC.actuators.longControlState == LongCtrlState.starting
       session_active = bool(CS.radar_acc_msg.get("AccControlActive", 0))
       long_active = CC.longActive and not CS.out.brakePressed and session_active
+      # no set speed -> never accelerate. Routes 31/2d show the engage frame
+      # is (AccControlActive=1, SetSpeed=0) - the radar ramps to its own
+      # stored target while OP's plan has no initialized cruise speed, and
+      # echoing its AccelCmd is what the driver reads as "速度没设置就一直
+      # 往上加". Until SetSpeed lands (1-2 s later in every trace) command
+      # hold-or-brake only; the positive half of our accel is clamped.
+      if long_active and int(CS.adas_msg.get("SetSpeed", 0) if CS.adas_msg else 0) == 0:
+        accel = min(CC.actuators.accel, 0.0)
+      else:
+        accel = CC.actuators.accel
       can_sends.append(bydcan.create_accel_command(
-        self.packer, CC.actuators.accel, CC.enabled, long_active, resume,
+        self.packer, accel, CC.enabled, long_active, resume,
         CS.radar_acc_msg, raw_cnt))
       if CS.adas_msg:
         can_sends.append(bydcan.create_acc_hud_command(self.packer, CS.adas_msg, raw_cnt))

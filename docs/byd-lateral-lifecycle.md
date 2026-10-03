@@ -198,3 +198,55 @@ values 四参数（`STEER_YIELD_OPPOSING_TORQUE=140`/`STEER_YIELD_DRV_RELEASE=90
   （main-on pcm_cruise_check + 0xf3 心跳双路径）；latch 保持 engaged 贯穿 standby
   → 心跳 engaged=1 → controls_allowed 保 → 横向存活。逻辑自洽，但**路测须实测确认
   fw 层未意外收紧横向**。
+
+## 七D、用户三天路测四问题复盘 + 根因 18(2026-10-02/03 数据,fix 2026-10-04)
+
+用户报告:①设 65 实跑 ~76(表显) ②纵向"设定就接管、没设速一直往上加" ③"车控"
+易退出、退出后几秒才恢复(要求秒内,可参考厂商;困难则接受"启 ACC 才控车")
+④三天两次 "LKAS Fault"。设备在线跑 1c49a6e(=本分支 HEAD),rlog 全量分析见
+`docs_site/byd_roadtest_2026-10-03/`(audit_3d.py / speed_fit.py / fault_scan.py /
+tx_scan.py / can_window.py,均在设备 /tmp 同源)。
+
+### 1. 车速偏差 = ESP_SPEED 信号 0.9 km/h/bit(问题①,定案)
+6 个 boot 会话 ~19k 个 1Hz 样本,`GPS/ESP = 1.112-1.118` 且 20-120 km/h 全速域平坦
+(0000002a/2b/2c/2d/31/32)。OP 把 raw 当 1 km/h 用 → 控制目标 = 表显/1.04 的 ~0.9 倍
+真速,"设 65 实 76"完全复现(65→真 72.3→表显 ~76)。**fix:HUD_MULTIPLIER=10/9**
+(values.py,wheelSpeedFactor 通道;carstate 注释里的"相机里程计验证"是循环论证,已改)。
+
+### 2. 油门噪声假接管(问题②③的机制层,定案)
+PEDAL `AcceleratorPedal` 0.01/bit,判据 `>0.01` = 1 个 LSB 噪声即触发:SD 状态
+enabled↔overriding 秒级翻 8 次(2d t=1485、31 t=1486),每次假油门松开纵向执行器;
+真油门压下降时厂商雷达进 `AccState=5 (FORCE_ACCEL)/AccControlActive=0`,OP 让位
+(session gate)并**原样回播雷达 AccelCmd** → 车在"没设速/低目标"下持续爬
+(31 t=1365-1372:tgt=40, gap 中 vEgo 46→60)。3.7h 会话 32 里 longActive 空窗
+140 次 >2s(v 全速域)。**fix:PEDAL_PRESS_THRESHOLD=0.05**(油门+刹车模拟量共用)
++ **session 内 SetSpeed==0 时 accel 只许 ≤0**(carcontroller `_update_longitudinal`,
+"没设速永不加速",接管时机语义不变:仍只在真会话控纵向)。
+
+### 3. 根因 18:EPS 会话中扭矩静默弃权 → 开环冲高 → err4 锁存(问题④,定案)
+两次 LKAS Fault(28 t=2053.8 v=69、2b t=1095.4 v=59)同签名(CAN 窗口转储
+`/tmp/win28.txt`/`win2b.txt` 同款于 docs_site/byd_roadtest_2026-10-03/):
+`MainTorque 75→0 + SteerWarning=1` 而 **err 仍 0、c 仍 1**(守卫栈全瞎),
+OP 无回显反馈继续积分,请求 0.4-0.7s 内 121→132/148→180,随后 err=4+TorqueFailed
+锁存、ACC 进 st=7。手力仅 -14~+9(非 1f 对抗类)。**与厂商差的那环 =
+STEER_ERROR_MAX=46 回显核对**(厂商 values 里有、python 侧从未实现)。**fix(guard C)**:
+c=1 且 |apply−MainTorque|>46 持续 10 命令帧(0.2s)→ stand-down + 3s 保持重试
+(仅 c=1 生效:厂商 c=0 等待流 193@mt=0 合法,7--12e,归守卫 B 管);
+另 **SteerWarning 进 allow 硬停**(本案 warn 与 mt=0 同帧,1 帧即缴械,0.2s 退出
+< err4 前 0.42s 窗口)。27 t=1527 同类 warn 0.5s 自愈场景亦被 warn 闸收住。
+恢复节奏:warn 清除 → hold 走 → 3 帧 burst 重武装(亚秒级,满足"秒内")。
+守卫 B(9s+6s)不动——tx_scan 实测其触发极罕(32 会话 armed 期 c-flap 未及)。
+
+### 4. 横向"退出"的用户感知归因(问题③)
+latActive 指标在 31/32 全程无掉(掉的那几次全是 main-off/park);用户体感的
+"退车控几秒"主体 = 上面 §2 的纵向空窗(油门不跟了)+ 真会话 3↔5 弹跳让位。
+守卫 A/B/C + warn 闸处理横向侧真实 stand-down,replay 21/21(新增场景 19 warn 弃权
+缴械+清除即复、20 静默分歧 growth-stop@14cmd、21 满速率正弦 100% 不误伤;
+旧 18 项含 brake-through/c0 全保留)。**厂商对照**:厂商从不出 mt=0 还冲请求的
+状态(它有回显核对),本案补齐这一层即对齐。
+
+### 5. 验证与设备侧数据链
+- 新码 shadow-import(不碰 /data/openpilot)在设备跑:replay 21/21;真 rlog 段
+  (28--34/35)CarState.update() 2001 帧无异常、vEgo×1.1111 生效、steer_warning 真实触发。
+- 待办:OTA 后首轮路测观察 ①定速 65=真 65(表显 ~68)手感 ②油门/刹车不再抖
+  overriding ③偶发 err=2/warn 是否 1-2s 内自恢复不再锁 ④"没设速"上电接管不再冲。

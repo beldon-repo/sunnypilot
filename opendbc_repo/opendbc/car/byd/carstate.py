@@ -31,6 +31,13 @@ class CarState(CarStateBase):
     self.shifter_values = can_define.dv["DRIVE_STATE"]["Gear"]
 
     self.lkas_prepared = False
+    # EPS's own warning flag (0x318 SteerWarning). Observed in the two
+    # post-v2 "LKAS Fault" latches (routes 28/2b 2026-10): 0.4-0.7 s BEFORE
+    # err=4+TorqueFailed the EPS drops MainTorque to 0 and raises Warn while
+    # keeping CruiseActivated=1 - a torque abort we could not see in
+    # SteerErrorCode alone (it stayed 0 through the whole abort). The
+    # controller stands down on it (root cause 18).
+    self.steer_warning = False
     # EPS session-phase bit ("executing now") - read by the controller's c0
     # guard (root cause 17 B): Active=1 that never gets accepted is a dead
     # stream, not a session to keep storming at
@@ -68,6 +75,7 @@ class CarState(CarStateBase):
     self.lkas_prepared = bool(cp.vl["ACC_EPS_STATE"]["LKAS_Prepared"])
     self.cruise_activated = bool(cp.vl["ACC_EPS_STATE"]["CruiseActivated"])
     self.torque_failed = bool(cp.vl["ACC_EPS_STATE"]["TorqueFailed"])
+    self.steer_warning = bool(cp.vl["ACC_EPS_STATE"]["SteerWarning"])
     # EPS's own warning level: observed 0 while idle and in clean sessions,
     # 2 as a ~0.5 s stand-down warning before it escalates to 4 + SteerWarning
     # + TorqueFailed (route c9f1698c82 seg 0). The controller obeys it like
@@ -92,8 +100,11 @@ class CarState(CarStateBase):
     # Song Plus DM-i: the 0x122 wheel-speed message reads all zeros and the
     # 0x418 BSD_RADAR VEHICLE_SPEED field is constant (~8.5), so neither is a
     # usable speed. The real vehicle speed comes from 0x1f0 ESP_SPEED
-    # (20 Hz, bus 0) byte 4 in km/h, verified against camera odometry on real
-    # drives (regression slope ~3.6, see route logs 2-7).
+    # (20 Hz, bus 0) byte 4 - note the signal is 0.9 km/h per bit, NOT 1.0
+    # (GPS fit on the 2026-10-02/03 road tests: true = 1.113 x raw, flat over
+    # 20-120 km/h; the earlier "verified against camera odometry" claim was
+    # circular - the odometry scale was itself anchored to this signal).
+    # CarStateBase folds that in via CP.wheelSpeedFactor = HUD_MULTIPLIER.
     vehicle_speed_kph = cp.vl["ESP_SPEED"]["VehicleSpeed"]
     self.parse_wheel_speeds(ret,
       vehicle_speed_kph,
@@ -120,10 +131,17 @@ class CarState(CarStateBase):
     # buckled). Matches the community BYD_Files port.
     ret.seatbeltUnlatched = False
 
-    # pedals
-    ret.gasPressed = cp.vl["PEDAL"]["AcceleratorPedal"] > 0.01
+    # pedals - the analog 0.01/unit signals idle at LSB noise, and >0.01 means
+    # a single count of noise fires the press. The 2026-10 road tests show the
+    # cost: openpilot state flapped enabled<->overriding 8x in 2 s (route 2d
+    # t=1485, 31 t=1486) - each false gas fire releases the longitudinal
+    # actuator for seconds while the stock radar FORCE_ACCEL-bounces (st 5,
+    # AccControlActive 0) - the "车控退出几秒才回来" the driver feels.
+    # 0.05 (5 counts) clears the noise band and still trips on a real touch.
+    ret.gasPressed = cp.vl["PEDAL"]["AcceleratorPedal"] > CarControllerParams.PEDAL_PRESS_THRESHOLD
     ret.brake = cp.vl["PEDAL"]["BrakePedal"]
-    ret.brakePressed = bool(cp.vl["DRIVE_STATE"]["BrakePressed"]) or ret.brake > 0.01
+    ret.brakePressed = bool(cp.vl["DRIVE_STATE"]["BrakePressed"]) or \
+      ret.brake > CarControllerParams.PEDAL_PRESS_THRESHOLD
 
     # steering
     ret.steeringAngleDeg = cp.vl["EPS"]["SteeringAngle"]
