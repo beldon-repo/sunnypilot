@@ -22,6 +22,13 @@ USE_ANGLE_STEERING = False
 
 
 class CarControllerParams:
+  # UI-only: the BYD cluster over-reads the GPS-anchored (10/9 calibrated)
+  # speed by ~8-9% (drive route 4 2026-10-04: cluster 38/48 vs calibrated
+  # 35/44 km/h in the two episodes). vEgoCluster is scaled to the cluster so
+  # the screen matches the driver's frame of reference; control stays on
+  # calibrated truth and never reads this field.
+  CLUSTER_OVERREAD = 1.086
+
   # --- torque path (default) ---
   # EVERY scalar below is taken verbatim from the vendor build's runtime
   # values dump (docs_site/op_byd_data/values.json, the decrypted op_byd

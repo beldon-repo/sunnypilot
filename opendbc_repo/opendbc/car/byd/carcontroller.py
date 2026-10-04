@@ -87,6 +87,21 @@ class CarController(CarControllerBase):
     # residue on the bus at err=2 is what escalated to err=4 + TorqueFailed.
     demand = max(-CarControllerParams.STEER_MAX_REQUEST, min(CarControllerParams.STEER_MAX_REQUEST, demand))
 
+    # Brake dead-session yield (drive route 4, 394-410 s: while the driver
+    # brakes the EPS refuses to enter a lateral session - c=0/mt=0 across 16
+    # s - but REMAIN_ACTIVE latActive keeps us armed, so we streamed +-200
+    # requests at a rack the EPS would not move while the driver fought the
+    # phantom torque by hand). This is NOT the armed-zero latch class (no
+    # session was ever accepted, nothing is being held open): ramp the
+    # request to zero for the brake+refused window, keep the session frame
+    # alive, resume on release (c rose 0.5 s after release, same trace - the
+    # EPS never lost the ability to follow, it just declines while braking).
+    # Guard B is exempt here too: bounded dormancy is not a dead stream to
+    # stand down, and its churn would punch holes in the 0x316 flow.
+    brake_yield = bool(CS.out.brakePressed) and not CS.cruise_activated
+    if brake_yield:
+      demand = 0
+
     # Guard A - opposing-hand yield WHILE THE EPS IS NOT EXECUTING (root
     # cause 17, route 1f: the storm that latched was our demand pinned at
     # +-200 against a 120-229 opposing hand at c=0/mt=0 - we were fighting
@@ -119,7 +134,7 @@ class CarController(CarControllerBase):
     # hold the retry burst STEER_C0_RETRY_HOLD_FRAMES, released early if the
     # EPS does activate. No assist is lost: at c=0 the EPS was not moving the
     # rack anyway (mt=0 across the whole 1f storm).
-    if self.lkas_active and not CS.cruise_activated:
+    if self.lkas_active and not CS.cruise_activated and not brake_yield:
       self.c0_frames += 1
     else:
       self.c0_frames = 0
