@@ -19,6 +19,7 @@ torque-direction test is ported verbatim.
 from cereal import car
 
 from openpilot.common.params import Params
+from openpilot.sunnypilot.common.raw_params import get_int_param
 
 
 class AssistLessLaneChange:
@@ -31,11 +32,9 @@ class AssistLessLaneChange:
     self.read_params()
 
   def read_params(self) -> None:
-    try:
-      self.assist_disabled = int(self.params.get("LaneChangeAssistSpeed", return_default=True)) == 0
-    except (TypeError, ValueError):
-      # prebuilt params lib without the key: mode stays off, same as stock
-      self.assist_disabled = False
+    # get_int_param works even before the prebuilt params_pyx.so registers the key
+    # (falls back to the raw /data/params file); unset defaults to 1 = stock assist mode
+    self.assist_disabled = get_int_param(self.params, "LaneChangeAssistSpeed", 1) == 0
 
   def update(self, CS: car.CarState) -> bool:
     if not self.assist_disabled:

@@ -2,6 +2,7 @@ from cereal import log, custom
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
+from openpilot.sunnypilot.common.raw_params import get_int_param
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeController, AutoLaneChangeMode
 from openpilot.sunnypilot.selfdrive.controls.lib.lane_turn_desire import LaneTurnController
 
@@ -62,11 +63,10 @@ class DesireHelper:
     self.read_params()
 
   def read_params(self) -> None:
-    try:
-      speed_mph = int(self.params.get("LaneChangeAssistSpeed", return_default=True))
-    except (TypeError, ValueError):
-      # prebuilt params lib without the key: keep stock behavior
-      speed_mph = int(LANE_CHANGE_SPEED_MIN / CV.MPH_TO_MS)
+    # the device's prebuilt params_pyx.so (v0.10.1) has no LaneChangeAssistSpeed
+    # registry entry; get_int_param falls back to the raw /data/params file so the
+    # threshold stays configurable until the .so is rebuilt by the release CI
+    speed_mph = get_int_param(self.params, "LaneChangeAssistSpeed", int(LANE_CHANGE_SPEED_MIN / CV.MPH_TO_MS))
     # inf on 0: every frame reads as "below threshold" so the assist state machine
     # stays off at any speed (vendor's disable intent; their un-decrypted DesireHelper
     # wrapper semantics can't be inspected, docs/byd-lane-change.md §三)
