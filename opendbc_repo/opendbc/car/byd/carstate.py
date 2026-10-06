@@ -46,6 +46,17 @@ class CarState(CarStateBase):
     self.steer_error = 0
     self.res_btn_pressed = False
     self.counter_pcm_buttons = 0
+    # Stalk-blinker side mapping override for the Song (see update): raw
+    # /data/params file, readable before the prebuilt params_pyx.so knows
+    # the key (get_param_path skips registry validation). 1 = swap L/R.
+    # Read once at init - restart to pick up changes.
+    self.blinker_stalk_swap = False
+    try:
+      from openpilot.common.params import Params
+      with open(Params().get_param_path('BydBlinkerStalkSwap')) as f:
+        self.blinker_stalk_swap = int(f.read().strip()) != 0
+    except Exception:
+      pass
     self.eps_state_msg = {}
     self.is_cruise_latch = False
     self.boot_frames = 0  # update() calls since process start (100 Hz card loop)
@@ -112,7 +123,11 @@ class CarState(CarStateBase):
       vehicle_speed_kph,
       vehicle_speed_kph,
     )
-    ret.vEgoCluster = ret.vEgo
+    # The BYD cluster over-reads the calibrated (GPS-anchored, 10/9) speed by
+    # ~9% (drive route 4: cluster 38/48 vs device 35/44 km/h, both episodes).
+    # Put the UI number on the cluster's scale so driver and screen agree;
+    # control stays anchored to calibrated truth (this field is display-only).
+    ret.vEgoCluster = ret.vEgo * CarControllerParams.CLUSTER_OVERREAD
     ret.standstill = ret.vEgoRaw < 0.05
 
     ret.brakeHoldActive = False
@@ -226,8 +241,18 @@ class CarState(CarStateBase):
     self.lka_on = ret.cruiseState.enabled
 
     # stalks and blind spots
-    ret.leftBlinker = bool(cp.vl["STALKS"]["LeftIndicator"])
-    ret.rightBlinker = bool(cp.vl["STALKS"]["RightIndicator"])
+    # Song Plus: the Han-layout LeftIndicator/RightIndicator bits (STALKS
+    # byte0) NEVER move on this car - drive route 4 (2026-10-04): byte0
+    # constant 0x01 through two 5-7 s stalk holds. The stalk position lives in
+    # TURN_SIGNAL_SWITCH (byte4, 36|3@1+): 1 = neutral, 4/5 = the two held
+    # detents (the actual lamps blink on 0x322 at 1.35 Hz during a hold).
+    # The vendor agrees: BYD_SONG_PLUS is in its ALT_BLINKER_CARS list
+    # (stalk-based blinkers, not lamp bits) - cp_byd carstate values dump.
+    # Default 5=left is a guess until a real flick confirms the side; write
+    # BydBlinkerStalkSwap=1 (raw file + restart) if the UI shows the opposite.
+    switch = int(cp.vl["STALKS"]["TURN_SIGNAL_SWITCH"])
+    ret.leftBlinker = switch == (4 if self.blinker_stalk_swap else 5)
+    ret.rightBlinker = switch == (5 if self.blinker_stalk_swap else 4)
     ret.espDisabled = False
     ret.stockAeb = bool(cp_adas.vl["ACC_HUD_ADAS"]["AEB"])
     ret.stockFcw = bool(cp_adas.vl["ACC_HUD_ADAS"]["FCW"])
