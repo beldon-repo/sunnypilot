@@ -179,8 +179,14 @@ class AssistLessLaneChange:
 - [x] **T2 L2 参数**（§三）**已落码 2026-10-04**：`params_keys.h` `LaneChangeAssistSpeed`(INT,"20")；`desire_helper.py` update_params 读参、`=0` 映射为 `inf`（v<inf 恒真=机器全关，含**中途改 0 会解除进行中的 preLaneChange**，与厂商一致且更干净）。单测 `test_lane_change_assist_speed.py` 5 例。
 - [x] **T3 L3 让位模式**（§四）**已落码 2026-10-04**：新类 `sunnypilot/selfdrive/controls/lib/assist_less_lane_change.py`（厂商 :691-703 逐行对齐，含当帧激活/双灯灭解锁/跨灯保持锁存）；接线 `controlsd_ext.get_lat_active`（排在 blinker_pause 后、MADS 分支前=任何模式下都让位）；事件走**案 A**（selfdrived 第二实例同谓词→`EventName.laneChange`，两进程同一 carState 流一帧内收敛；`params_thread` 10Hz 刷参，与 mads 同钩子）。单测 `test_assist_less_lane_change.py` 9 例。
   - **本机跑法**（仓库只带设备端 .so，pytest 在本机 import Params 即挂，既有 sunnypilot 测试同样跑不了）：`docs_site/byd_lane_change_2026-10-04/run_host_tests.py`（stub params → 5 套件 **69/69**，含把三个历史套件首次跑通）。设备/CI 原生环境直接 `pytest` 两个新文件。
-- [ ] **T4 路测首测 checklist**：preLaneChange 提示→带舵→starting 轨迹→finishing 回归；盲区 blocked；低速 <20 不触发；L3：拨灯带舵→latActive=0 且灭灯恢复、EPS 无 err；采集 log 回灌 docs_site/。
+- [x] **T4 路测首测 checklist**（2026-10-05..07 部分完成，docs_site/byd_logs_2026-10-05_07/ 415 段 rlog/qlog）：
+  - **拨杆灯位语义已定案（推翻 §1.4 的 5=左 猜测）**：`TURN_SIGNAL_SWITCH` 是**成对集合**不是单值——厂商 disasm 10706/10756：`leftBlinker = in (2,3)`、`rightBlinker = in (4,5)`；实车逐段回放 2886 帧/段确认 **右拨 = 1→4(0.3-0.4s)→5(保持)**、**左拨 = 1→2(0.4s)→3(保持)**（瞬态是拨杆机械经过位，与保持位同侧，故厂商把两侧各两值并集）。旧单值猜测 5=左把两侧整体反了。
+  - **旧映射的实测后果**：左拨（raw 2/3，采样 32 段里共 100s）`carState.leftBlinker` **恒 0** → 左变道、UI 左灯、BlinkerPauseLateral、L3 让位全部对左灯失效；右拨的 60 次 `laneChangeStarting right` **全部落在 0.2-0.3s 瞬态上**（85 个瞬态→60 次发起，命中 71%），415 段里**没有一次长 hold 被识别成右灯**（>1.2s 的右 run = 0，左 run = 81）。
+  - **待复测**：修完映射后的左灯 preLaneChange→带舵→starting→finishing、盲区 blocked（BSD 位已核对无异常：`RIGHT_APPROACH` 13.3% / `LEFT_APPROACH` 5.5% 帧占、`APPROACH`=两侧之或，与字节位一致）、L3 让位、低速 <32km/h 不触发。
 - [ ] T5（可选）：UI 注册 + 英文/中文文案。
+- [ ] **T6 拍板项（路测数据带出的两条，均属控制行为，先不动）**：
+  1. **发起窗口被放大**：旧映射只在 0.3s 瞬态里发起（85→60，命中 71%）；映射修正后一次拨灯 = 连续 2-9s 的 `one_blinker`（左 hold 实测中位 2.6s、最长 20.3s），整段都是 preLaneChange 待命——**只想示意不想变道时，方向盘稍给力矩即开变道**的暴露时间放大 ~10 倍。候选（择一）：preLaneChange 需持续 N 帧才允许 starting / 提高 torque 门限 / 保持现状（与厂商一致）。
+  2. **灯不灭就再来一次**：`laneChangeFinishing → one_blinker → preLaneChange` 是 stock 语义，数据里已见 seg --51 38s 内 3 连发、--25 2 连发；叠加 §1.4 的方向翻转旧象（同一拨灯内 preLaneChange right→left 翻转 4 次、由此产生 2 次意外的 `starting left`）→ 修完映射后翻转消失，但**连续变道/变完再变回**的机制仍在。候选：starting 后要求灯重新来过（灭灯边沿）才允许下一次。
 
 ## §七 本文档的证据链
 
