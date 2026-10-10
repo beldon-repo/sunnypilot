@@ -80,7 +80,7 @@ DBC：`opendbc_repo/opendbc/dbc/byd_general_pt.dbc`；固件侧安全模型：`o
 | **CruiseActivated** | 1\|1 | **EPS 自己的会话相位标志（"正在执行"）——非许可、非原车 ACC 状态（规则 10）**。接受会话后才置 1（0000000a：旧架构已武装 3.6s 后 76.31s 才置 1）；err=2 退场时与 p 一同清 0；与 OP 的 cruiseState.enabled 完全不同步。**勿门控于此位**（c 门死锁：0000000d 两段 7218 帧全零、零控车，`51b1a25a` 修正） |
 | **TorqueFailed** | 2\|1 | **锁存故障**：EPS 放弃全部转向输入，**直到点火循环**（route 0000001c/20/22 + yysnet 同注 "EPS give up all inputs until restart"）；OP 收到即硬切退让 + UI "LKAS Fault: Restart the car to engage"（0000000a 实证：锁存后第二段全程 fault=True，重启车才清） |
 | SteerWarning | 4\|1 | 见 §7；err=2 预警时 warn 同步置 1（0000000a 三次 err=2 均 warn=1） |
-| SteerErrorCode | 5\|3 | **码表部分解码（0000000a + c9f1698c82）**：2 = ~0.5s 站下预警（可恢复，解除违规状态即清零，本日 3 次中 2 次自行恢复）；4 = 升级锁存，与 TorqueFailed 同帧出现（110.33s err=4+tf=1）→ 永久 LKAS Fault。1/3/5-7 未观测 |
+| SteerErrorCode | 5\|3 | **码表部分解码（0000000a + c9f1698c82）**：2 = ~0.5s 站下预警（可恢复，解除违规状态即清零，本日 3 次中 2 次自行恢复）；4 = 升级锁存，与 TorqueFailed 同帧出现（110.33s err=4+tf=1）→ 永久 LKAS Fault。**2026-10-11 二轮挖掘（415 段 b33616e596 语料）首次观测到 1/3**：err=3 639 帧=单一 episode ≈12.8s（seg 3e696e--0 t=79.2，c=1 会话健康、warn/tf 全程 0、自恢复回 0）；err=1 36 帧。两者形态良性，疑似"降级但续会话"档；语义仍需 EPS 分册。5-7 仍未观测 |
 | **MainTorque** | 8\|12 有符号 | **执行侧扭矩，非无条件回显**——6.12/6.18 的"纯指令回显"结论被根因 16 推翻：c=0 拒绝窗口 demand -240 持续 4s 而 mt=0（回显说不成立）；执行时紧跟 LKAS_Output（相关 0.98，0000000a 实测 mt 略超 demand：-285 vs -240、+205 vs +198）。**mt==0 且 demand≠0 = "EPS 未执行"的可靠判据**（本次诊断即用它定位死会话）；是否等于电机实际出力仍存疑，但执行判据用途已定论 |
 | ReportHandsNotOnSteeringWheel | 21\|1 | |
 | SteerDriverTorque | 24\|12 有符号 | 驾驶员扭矩 raw 量程，见 §8 |
