@@ -17,6 +17,15 @@ LaneChangeDirection = log.LaneChangeDirection
 LANE_CHANGE_SPEED_MIN = 20 * CV.MPH_TO_MS
 LANE_CHANGE_TIME_MAX = 10.
 
+# BYD hardening (docs/byd-lane-change.md §八): BSD_RADAR 0x418 is the only rear
+# traffic input on this platform - no radar objects are ever logged (0x374 has
+# zero frames in all 415 road-test segments) - and it refreshes at 10 Hz, so the
+# stock one-frame blindspot sample at the starting edge is lag-prone. The stalk
+# also decodes a 0.2-0.3 s mechanical transient as a blinker, letting a change
+# start before any fresh BSD frame could arrive. Require the same-side blindspot
+# to stay continuously clear this long in preLaneChange before starting.
+LANE_CHANGE_CLEAR_TIME_MIN = 0.5
+
 DESIRES = {
   LaneChangeDirection.none: {
     LaneChangeState.off: log.Desire.none,
@@ -51,6 +60,7 @@ class DesireHelper:
     self.lane_change_direction = LaneChangeDirection.none
     self.lane_change_timer = 0.0
     self.lane_change_ll_prob = 1.0
+    self.lane_change_clear_time = 0.0
     self.keep_pulse_timer = 0.0
     self.prev_one_blinker = False
     self.desire = log.Desire.none
@@ -98,6 +108,7 @@ class DesireHelper:
       if self.lane_change_state == LaneChangeState.off and one_blinker and not self.prev_one_blinker and not below_lane_change_speed:
         self.lane_change_state = LaneChangeState.preLaneChange
         self.lane_change_ll_prob = 1.0
+        self.lane_change_clear_time = 0.0
 
       # LaneChangeState.preLaneChange
       elif self.lane_change_state == LaneChangeState.preLaneChange:
@@ -114,20 +125,43 @@ class DesireHelper:
 
         self.alc.update_lane_change(blindspot_detected, carstate.brakePressed)
 
+        # rear-traffic clear window (LANE_CHANGE_CLEAR_TIME_MIN): a same-side
+        # blindspot hit at any point reopens it, so starting only ever happens
+        # behind a continuous run of clear BSD frames
+        if blindspot_detected:
+          self.lane_change_clear_time = 0.0
+        else:
+          self.lane_change_clear_time += DT_MDL
+
         if not one_blinker or below_lane_change_speed:
           self.lane_change_state = LaneChangeState.off
           self.lane_change_direction = LaneChangeDirection.none
-        elif (torque_applied or self.alc.auto_lane_change_allowed) and not blindspot_detected:
+        elif (torque_applied or self.alc.auto_lane_change_allowed) and \
+                self.lane_change_clear_time >= LANE_CHANGE_CLEAR_TIME_MIN - 1e-6:  # float-sum tolerance
           self.lane_change_state = LaneChangeState.laneChangeStarting
+          self.lane_change_clear_time = 0.0
 
       # LaneChangeState.laneChangeStarting
       elif self.lane_change_state == LaneChangeState.laneChangeStarting:
-        # fade out over .5s
-        self.lane_change_ll_prob = max(self.lane_change_ll_prob - 2 * DT_MDL, 0.0)
+        # BYD hardening: bail mid-maneuver if the same-side blindspot lights up
+        # (BSD is the only rear-traffic source here - once starting the stock
+        # machine was unprotected). Returning to preLaneChange zeroes the desire
+        # (lat centers back) and makes selfdrived raise laneChangeBlocked; the
+        # clear window reopens so the change only restarts once the car has
+        # passed. laneChangeFinishing is NOT aborted - swinging back across the
+        # line this late is worse than completing the maneuver.
+        blindspot_now = ((carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or
+                         (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
+        if blindspot_now:
+          self.lane_change_state = LaneChangeState.preLaneChange
+          self.lane_change_clear_time = 0.0
+        else:
+          # fade out over .5s
+          self.lane_change_ll_prob = max(self.lane_change_ll_prob - 2 * DT_MDL, 0.0)
 
-        # 98% certainty
-        if lane_change_prob < 0.02 and self.lane_change_ll_prob < 0.01:
-          self.lane_change_state = LaneChangeState.laneChangeFinishing
+          # 98% certainty
+          if lane_change_prob < 0.02 and self.lane_change_ll_prob < 0.01:
+            self.lane_change_state = LaneChangeState.laneChangeFinishing
 
       # LaneChangeState.laneChangeFinishing
       elif self.lane_change_state == LaneChangeState.laneChangeFinishing:
@@ -137,7 +171,10 @@ class DesireHelper:
         if self.lane_change_ll_prob > 0.99:
           self.lane_change_direction = LaneChangeDirection.none
           if one_blinker:
+            # consecutive change (stock "keep blinker on" semantics): re-check
+            # the rear before allowing the next one in
             self.lane_change_state = LaneChangeState.preLaneChange
+            self.lane_change_clear_time = 0.0
           else:
             self.lane_change_state = LaneChangeState.off
 

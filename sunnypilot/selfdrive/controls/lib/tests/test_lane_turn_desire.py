@@ -108,6 +108,8 @@ def set_lane_turn_params():
 def test_desire_helper_integration(carstate, lateral_active, lane_change_prob, expected_desire, set_lane_turn_params):
     dh = DesireHelper()
     dh.alc.lane_change_set_timer = AutoLaneChangeMode.NUDGE
-    for _ in range(10):
+    # 12 frames: the BYD blindspot-clear gate (docs/byd-lane-change.md §八) needs
+    # >=0.5s (10 modeld frames) in preLaneChange before a nudge can start the change
+    for _ in range(12):
         dh.update(carstate, lateral_active, lane_change_prob)
     assert dh.desire == expected_desire  # The first four tests were unit tests to test the controller, where this tests the integration in desire helpers
