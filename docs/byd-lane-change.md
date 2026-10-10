@@ -185,7 +185,7 @@ class AssistLessLaneChange:
   - **待复测**：修完映射后的左灯 preLaneChange→带舵→starting→finishing、盲区 blocked（BSD 位已核对无异常：`RIGHT_APPROACH` 13.3% / `LEFT_APPROACH` 5.5% 帧占、`APPROACH`=两侧之或，与字节位一致）、L3 让位、低速 <32km/h 不触发。
 - [ ] T5（可选）：UI 注册 + 英文/中文文案。
 - [ ] **T6 拍板项（路测数据带出的两条，均属控制行为，先不动）**：
-  1. **发起窗口被放大**：旧映射只在 0.3s 瞬态里发起（85→60，命中 71%）；映射修正后一次拨灯 = 连续 2-9s 的 `one_blinker`（左 hold 实测中位 2.6s、最长 20.3s），整段都是 preLaneChange 待命——**只想示意不想变道时，方向盘稍给力矩即开变道**的暴露时间放大 ~10 倍。候选（择一）：preLaneChange 需持续 N 帧才允许 starting / 提高 torque 门限 / 保持现状（与厂商一致）。
+  1. **发起窗口被放大**：旧映射只在 0.3s 瞬态里发起（85→60，命中 71%）；映射修正后一次拨灯 = 连续 2-9s 的 `one_blinker`（左 hold 实测中位 2.6s、最长 20.3s），整段都是 preLaneChange 待命——**只想示意不想变道时，方向盘稍给力矩即开变道**的暴露时间放大 ~10 倍。候选（择一）：preLaneChange 需持续 N 帧才允许 starting / 提高 torque 门限 / 保持现状（与厂商一致）。→ **已拍板落码（§八.2 方案一"持续 clear 窗口"）**，顺带堵死后文瞬态发起与 BSD 10Hz 滞后。
   2. **灯不灭就再来一次**：`laneChangeFinishing → one_blinker → preLaneChange` 是 stock 语义，数据里已见 seg --51 38s 内 3 连发、--25 2 连发；叠加 §1.4 的方向翻转旧象（同一拨灯内 preLaneChange right→left 翻转 4 次、由此产生 2 次意外的 `starting left`）→ 修完映射后翻转消失，但**连续变道/变完再变回**的机制仍在。候选：starting 后要求灯重新来过（灭灯边沿）才允许下一次。
 
 ## §七 本文档的证据链
@@ -193,3 +193,38 @@ class AssistLessLaneChange:
 - 厂商：op_byd/selfdrive/controls/controlsd.py:121-122,376-388,691-703,730-736；lib/legacy_lateral_planner.py:9,38,77-83；lib/ 下无 desire_helper.py（未改实证）。
 - 本仓库：selfdrive/controls/lib/desire_helper.py:10,41-139；selfdrive/modeld/modeld.py:220,348-353；selfdrive/controls/controlsd.py:115-128；selfdrive/selfdrived/selfdrived.py:314-329；selfdrive/selfdrived/events.py:399-428；sunnypilot/selfdrive/controls/controlsd_ext.py:14,21,34,36-45；sunnypilot/selfdrive/controls/lib/auto_lane_change.py:13-36,45,63-64,85-106；opendbc_repo/opendbc/car/byd/carstate.py:151-156,229-236；common/params_keys.h:136。
 - 路测背景：docs/byd-lateral-lifecycle.md §七A/B（根因16/17、守卫 A+B）、byd-control-lessons.md、docs_site/byd_roadtest_2026-10-03/。
+- §八审计：`tools/byd/lane_change_bsd_audit.py`（本仓库，host 可跑）对 docs_site/byd_logs_2026-10-05_07/realdata 全 415 段 rlog；carrotpilot 同源移植（op/carrotpilot 本地 clone，byd 目录注释逐字相同、同样 radarUnavailable=True 无 radar_interface）；params_snapshot_2026-10-07（AutoLaneChangeTimer=0=NUDGE、无 LaneChangeAssistSpeed 文件=默认 20、BlinkerPauseLateral=0）。
+
+---
+
+## §八 BSD 门控强化与后方来车审计（2026-10-10 拍板+落码）
+
+### 8.1 缘起与审计事实
+
+用户路测反馈"打灯变道又没有根据雷达判断后方有车才变道"。对 415 段存档 rlog 全量审计（§八工具），事实链：
+
+1. **门控存在且在工作**：70 次 `laneChangeStarting` 发起帧，**同侧 blindspot=1 的 0 次**；`laneChangeBlocked` 事件 20 次。`desire_helper.py` 的 `blindspot_detected` 拦截（§二 stock 路径）不是纸面代码。
+2. **但它只有一只 10Hz 的眼睛**：`BSD_RADAR` 0x418 的 LEFT/RIGHT_APPROACH（2-bit，值域实测 0/1/2，rare 2）是**全部**后方来车输入——415 段里 `RADAR_MRR` 0x374 **0 帧**（录制 bus 上根本不存在）；厂商 fork 同样只用 CS.blindspot（其 radar_interface.py 未解密、controls 层拦截=原生 BSD 位），carrot 移植同样 `radarUnavailable=True`。**结论：当前平台拿不到目标级"后方多远/多快接近"，BSD 位只覆盖"已进入盲区警告圈"——后方远处快速接近的车在 BSD 亮之前，系统视之为安全。**
+3. BSD 帧占：carState blindspot-true 19.66%（(1,0) 左 44504 / (0,1) 右 58605 / (1,1) 17674 帧）；60+ 次瞬态（0.07-0.15s hold）右发起是旧映射 bug 产物，映射已修（839d871ae8）。
+
+### 8.2 落码（`selfdrive/controls/lib/desire_helper.py`，全车型生效、BYD 设备实测）
+
+| 变更 | 谓词 | 理由 |
+|---|---|---|
+| **①发起前 clear 窗口** | 新增 `LANE_CHANGE_CLEAR_TIME_MIN=0.5`：preLaneChange 中同侧盲区连续 clear 累计 `lane_change_clear_time ≥0.5s（容差 1e-6，防 10×DT_MDL 浮点和差一帧）`才允许 `(torque_applied or alc.allowed)` 进 starting；任一同侧命中→归零；off→pre、finishing→pre（连续变道）、pre→starting 三处入口都重置 | 堵 BSD 10Hz 采样滞后 + 拨杆瞬态发起（T6.1 候选一落地；0.3s 瞬态永远凑不满 0.5s 窗） |
+| **②变道途中中止** | starting 状态下同侧 blindspot=1 → 回 **preLaneChange**、desire 归零（横向回中）、clear 窗重开；selfdrived 对 preLaneChange+盲区的既有谓词自动弹 `laneChangeBlocked` | 原 starting 全窗无保护（10s）；finishing **不**中止——过半再折回比继续完成更危险 |
+| ③连续变道重检 | finishing→pre 也重置窗口 | 变完再变/变回必须重新确认后方 |
+
+不动项：`LaneChangeAssistSpeed=0` 让位模式（状态机本就 off，厂商语义）；ALC/BlinkerPauseLateral 语义；carstate 信号（0x418 已正确解析，carstate.py:268-269）。
+
+### 8.3 测试
+
+- `test_lane_change_assist_speed.py`：新增 `TestBlindspotRearTrafficGate` 6 例（边缘有盲区永不起动 / 窗口中途命中重开 / 途中同侧中止回 pre 且保持方向 / 对侧不中止 / 中止后须满窗再起 / 连续变道重开窗）；原 nudge 例适配窗口；`test_lane_turn_desire.py` 集成例 10→12 帧。
+- host 跑法（本机 pytest 缺 pytest-asyncio 触发 `--strict-config` 直接 bail）：`.venv/bin/python docs_site/byd_lane_change_2026-10-04/run_host_tests.py -o addopts=` → **75/75**（原 69+6）。
+
+### 8.4 雷达挖掘待办（根治"后方远处来车"，设备上线后）
+
+- [ ] **T7 设备探针**：`tools/byd/radar_bus_probe.py`（只收不发，bus0-3 全量报文频率表+未知发送者标记）。先停栈防 canerd 占 panda；宋线束现仅接 bus0/2——**bus1/3 若为 0 帧本身就是结论**（雷达不在可及总线，要评估引线的物理代价）。
+- [ ] T8 找到目标流后：入 dbc→（可选 radar_interface/radarState 或新增车型侧信号）→ starting 前做距离+接近速度门控（参照 stock `can_change_lane` 语义，本仓库已无该函数，需自建）。
+- [ ] T9 复测 §8.2 三行为（路测）：①满窗才起 ②途中亮盲区=回原车道+blocked 提示 ③连续变道二次确认；顺带回归 10-09 拨杆集合判 2/3 左、4/5 右。
+- 语义留白：0x418 2-bit 的 1 vs 2 档位含义未知（实测 2 值仅 0.05% 帧）；若路测证实"2=紧迫"，可把发起条件收紧为特定档位而 bool 保留中止。BSD 19.66% 帧占意味着正常跟车就可能常亮——路测若发现 0.5s 窗频繁延误发起，回来重定 `LANE_CHANGE_CLEAR_TIME_MIN` 或改用档位语义。
