@@ -260,3 +260,14 @@ class AssistLessLaneChange:
 - **厂商 bytecode 定案（10-11 夜，`marshal` 直读 `radar_interface.py.parts/006/008*.pyc` 的 co_names——车型 frozenset 未被混淆）**：分支 = **{BYD_TANG_GAS, BYD_TANG_DM} → (849,852) @25Hz on CanBus.BYD_AUX**（`values.py.values.txt` 钉死 **BYD_AUX=1=bus1**、BYD_CAM=2）；{HAN_EV/DM_20_21} → (884) on bus2；**宋不在任一分支=厂商不为宋解雷达**（与"宋 0x35x 全空载"因果闭合：不是漏配宋，是宋的 MRR 真不往 bus1 发目标——"tangdm 是否适用宋"从推定升级为同家族实证，消费方式以厂商 Tang 分支为准）。
   - `_update` 全文还原：**Tang 分支 `vRel = REL_SPEED × KPH_TO_MS`**（汉 20/21 才走 `NonConstantCanSignalRateCalculator(60,16)` 距离差分）、`yRel = clip(LAT_DIST,±5)`、**`track_id==0` = 空槽哨兵**、失效链 `no_var_cnt≥INVALID_LIMIT→measured=False→NO_VAR_LIMIT→删点`。§8.5 第 2 条早先"vRel=nan 厂商没有目标速度"系误读 decompyle 伪码，**更正**（nan 仅 aRel/yvRel）。
   - 对齐落码：`_update_tracks` 增 tid==0 哨兵 + yRel clip±5；vRel 换算从"TODO 猜测"升级为"厂商同款"（dbc factor/offset 数值仍待首帧真目标核对）。复验：host **87/87**（+1 哨兵用例）；回放 4212 帧返回、按厂商口径可疑 track 帧 **0**、回退 3620/3620 不变。
+
+### 8.5.7 byd_logs_2026-10-05_07 全量雷达复扫（2026-10-11 夜，415 段 6.9GB，工具 `tools/byd/radar_1005_scan.py`，数据 `radar_mine_1005.json`）
+
+社区包对照驱动的定案级复扫——把 0x351-354 槽、0x374、bus1 全部高频地址块一次过筛（跟车帧 0.9M+）：
+
+- **0x351-354（tangdm 槽）**：793,578 tick×4 槽（bus1 实测 742,452 帧/槽），**IsValid=1 计 0、TrackID≠0 计 0**；80 种 payload 仅 b0/b1 滚动计数器+状态位。即使同档案 HUD 有 903,258 个 lead 帧（60.8%），槽从不带目标——"AEB/跟车工况会填槽"假设在本档案无一次例外，**track 路只能靠引私有 CAN 点亮**。
+- **0x374 RADAR_MRR**：**415 段×全总线 0 帧**。社区 `byd源码/radar_interface.py`（0x374 @MPC=bus2，TargetID 1左/2前/3右）对宋同样被其 `radarUnavailable=True` 死代码（§8.5.6 互证再强化）；唐 dbc 的 MSG_34x 布局系暴力拟合伪迹（range [1.0|1.0]/factor 100），不可采信。
+- **bus1 新面证伪（本轮最大发现）**：冒烟直方图浮出两个从未挖过的连续块——**0x101-0x10A（@25Hz，与槽同 tick）与 0x340-0x34A（@14Hz）**，payload 多样性"RICH"。用 `radar_layout_mine.py --targets`（新增 --targets/--segs 旗标）对 8 个强跟车段做秩一致性：**无任何 u8/u16 字段达到 ≥8 种取值**——数据字节准常量，变异全部来自共享 b1 计数器；与 0x380-38F/0x3F8-3FF/0x301/0x396/0x397/0x350 同一签名（b1 每帧严格 +17 mod256）。**判定：宋 bus1 = 单 ECU 状态广播全家桶，无目标流，非漏挖**。这正是首轮 0x38x 新鲜度伪影陷阱的重演，工具 docstring 已记。
+- **0x32D HUD 档位观察（喂 §8.5.4 标定）**：1,484,902 帧、lead 60.8%、321/415 段有 lead；**LeadingDistance 全档案只出现 1-4 档**（bar1 0.4% / bar2 9.7% / bar3 39.9% / bar4 50.0%），0/5/6/7 从未出现——`RADAR_HUD_BARS_TO_M` 的 5-7 是外推值，路测标定按 1-4 即可；档位切换全程仅 1,482 次（lead 期稳定，回退合成不抖）。
+- bus1 另有 J1939 扩展帧 0x7FE7A00/0x1BFE7A1A/0x1BFE7A1B（~14Hz 诊断广播），与雷达无关，track 解析器地址集不命中即无影响。
+- **落码侧微调（本 commit，注释级、零行为变更）**：`values.py` 档位表注记观测分布；`radar_interface.py` docstring 把"AEB duty state 可能填槽"降级为"415 段实证仅私有 CAN 引线可达"；`radar_layout_mine.py` VERDICT 扩两个新证伪块。

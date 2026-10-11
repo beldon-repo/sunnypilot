@@ -203,7 +203,8 @@ HUD_MULTIPLIER = 10 / 9
 
 # HUD-synthesized radar lead: gap-bar midpoint distances, meters (bar 1=near
 # .. 7=far, per 0x32D LeadingDistance VAL_ semantics of SetDistance 1BAR..4BAR).
-# PLACEHOLDERS - 415 logged segments only ever show bars 1-4 (mostly 4), so
+# PLACEHOLDERS - 415 logged segments (0.9M lead frames, docs §8.5.7) only ever
+# show bars 1-4 (0.4% / 9.7% / 39.9% / 50.0%; 0/5/6/7 never observed), so
 # absolute meters are unmeasurable offline; calibrate on-road with measured
 # stand-off gaps at each bar before anything control-relevant reads these.
 # RadarInterface only exposes the value; no control path uses it while

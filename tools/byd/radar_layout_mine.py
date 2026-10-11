@@ -10,15 +10,25 @@ idle heartbeats (AUC 0.5 while following), NO target-level radar stream
 (front or rear) exists on any recorded bus. The shipped radar path is the
 0x32D HUD-bar synthesis in opendbc/car/byd/radar_interface.py instead.
 
+2026-10-11 full-archive rescan (radar_1005_scan.py, 415 segs, docs §8.5.7)
+swept EVERY high-rate bus1 block through the same screen - 0x101-0x10A @25Hz
+(same tick as the track slots), 0x340-0x34A @14Hz, 0x301, 0x350, 0x396/0x397,
+0x3F8-0x3FF - payload diversity said "RICH" but rank-consistency failed on
+every u8/u16 field (all data bytes quasi-constant; variation is the shared
+b1 counter, +17/frame mod 256, identical signature to 0x38x). One ECU status
+broadcast family, not target streams. 0x374 also re-confirmed 0 frames on all
+buses. The no-target-stream verdict now covers the entire bus1 address space.
+
 Keep this tool for reuse if a new bus ever gets tapped (docs §8.5.3): ground
 truth is 0x32d ACC_HUD_ADAS HasLead(bit9)/LeadingDistance(bit13-15), and a
 real target field must be rank-consistent per bar ACROSS segments, not just
 correlated within one - the within-segment trap is exactly what fooled the
-first pass.
+first pass (and the naive payload-diversity screen in round two).
 
 Usage (host):
   .venv/bin/python tools/byd/radar_layout_mine.py docs_site/byd_logs_2026-10-05_07/realdata
   .venv/bin/python tools/byd/radar_layout_mine.py <dir> --top 8 --slot 0x382
+  ... --targets 0x101,0x102,... --segs segA,segB   (mine other blocks on chosen following segments)
 """
 import sys, glob, argparse, bisect, statistics as st
 sys.path.insert(0, "/Users/wujiafu/Documents/work/op/sunnypilot")
@@ -83,9 +93,19 @@ def main():
   ap.add_argument("dir")
   ap.add_argument("--top", type=int, default=6, help="use N strongest-following segments")
   ap.add_argument("--slot", default=None, help="dump raw byte timeline for one addr, e.g. 0x382")
+  ap.add_argument("--targets", default=None,
+                  help="comma list of bus1 addrs to mine instead of 0x38x, e.g. 0x101,0x102,...")
+  ap.add_argument("--segs", default=None, help="comma list of segment dir names; skips selection pass")
   a = ap.parse_args()
+  global TARGETS
+  if a.targets:
+    TARGETS = [int(x, 16) for x in a.targets.split(",")]
 
   segs = sorted(glob.glob(f"{a.dir}/*/rlog.zst"))
+  if a.segs:
+    names = set(a.segs.split(","))
+    segs = [f for f in segs if f.split("/")[-2] in names]
+    print(f"# using {len(segs)} explicit segments")
   if a.slot:
     addr = int(a.slot, 16)
     f = segs[0]
@@ -98,17 +118,21 @@ def main():
     return
 
   # selection pass: strongest following segments (lead frames with bar<=3, bar variety)
-  cand = []
-  for f in segs:
-    _, hud_t, hud = collect(f)
-    lead = [b for h, b in hud if h]
-    low = sum(1 for b in lead if b <= 3)
-    if len(lead) > 2000 and low > 200 and len(set(lead)) >= 3:
-      cand.append((low, f))
-  cand.sort(reverse=True)
-  use = [f for _, f in cand[:a.top]]
-  print(f"# following segments: {len(cand)} candidates, using {len(use)}")
-  for f in use: print("#   ", f.split("/")[-2])
+  if a.segs:
+    use = segs
+    print(f"# selection skipped, using {len(use)} explicit segments")
+  else:
+    cand = []
+    for f in segs:
+      _, hud_t, hud = collect(f)
+      lead = [b for h, b in hud if h]
+      low = sum(1 for b in lead if b <= 3)
+      if len(lead) > 2000 and low > 200 and len(set(lead)) >= 3:
+        cand.append((low, f))
+    cand.sort(reverse=True)
+    use = [f for _, f in cand[:a.top]]
+    print(f"# following segments: {len(cand)} candidates, using {len(use)}")
+    for f in use: print("#   ", f.split("/")[-2])
 
   # per-slot analysis (decode each used segment once)
   cache = {}

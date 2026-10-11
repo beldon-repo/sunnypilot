@@ -6,11 +6,13 @@ Two sources, in priority order (docs/byd-lane-change.md §8.5):
      taken verbatim from the mypilot community byd_tangdm_radar.dbc (same IDs
      the vendor's decompiled radar_interface parses for some BYD models).
      On the Song these slots are logged across all 415 archive segments as
-     IsValid=0 placeholder frames (LongDist=-4 / LatDist=-24 floor values),
-     i.e. the MRR does not export targets onto bus 1 today - but the frames
-     ARE this protocol family, and the slot path auto-lights the moment a
-     real target stream is reachable (radar private CAN tap, or a duty state
-     like AEB that populates slots).
+     IsValid=0 placeholder frames (793k ticks/slot, 0 with IsValid=1 or
+     TrackID!=0 - even during 0.9M HUD lead frames, docs §8.5.7), i.e. the
+     MRR does not export targets onto bus 1 - but the frames ARE this
+     protocol family, and the slot path auto-lights the moment a real target
+     stream becomes reachable (radar private CAN tap; no duty state on the
+     car's wired buses fills the slots - 0x374 is also 0 frames on every bus
+     across the full archive rescan).
 
   2. 0x32D ACC_HUD_ADAS on bus 2 - the stock radar's fused single-lead
      summary (HasLead + LeadingDistance 0-7 gap bars). Always available;
