@@ -15,6 +15,7 @@
 | 官方维修手册（2021 款宋 PLUS DMi）ACC + MPC 分册 | `docs_site/pdf/2021年款比亚迪宋PLUS DMi-01-维修手册-*.txt`（OCR，正文可读） | 已消化 §4 |
 | 官方维修手册 **EPS 分册** | **未获得** —— SteerErrorCode 码表仍缺，搞到即补 | 缺 |
 | MM-X sunnypilot-pc（PC 运行 fork，BYD 在 submodule `MM-X/opendbc-sny`） | `/Users/wujiafu/Documents/op/sunnypilot-pc/opendbc_repo/opendbc/car/byd/`（yysnet 二手拷贝，2025-04~08 冻结） | 已消化 §3.4 |
+| 🐬 mypilot 社区开源包（BYD 全系+吉利：厂商固件同源明文还原 + 调校包 + DBC 库） | `/Users/wujiafu/Documents/op/openpilot-mypilot-community-dbcall/` | 已消化 §3.5（2026-10-11；雷达 tangdm 布局已并入 lane-change §8.5.6） |
 | 厂商固件 ELF（带符号） | `docs_site/op_byd`（panda.elf：BYD_STEERING_LIMITS=[300,18,18,…,46]、LOW=[300,9,9,46]、HIGH error=200、ALT=[150,50,50]） | 已入 EPS 参考 §9 |
 
 ## 二、厂商解密代码的发现（最权威参考实现）
@@ -98,6 +99,30 @@ new_steer_pu = np.clip(steer_desire, -self.steerRateLim, self.steerRateLim)
 2. **fake 0x318 回发 MPC**（`carcontroller.py create_fake_318`）：他们伪造 EPS 状态帧糊住摄像头来消 fault，与我们"echo 摄像头原字段"是两条路线。我们方案已实证，此项仅作备案——若再遇 `check MFC` 类 fault 可对比。
 3. **距离域纵向 jerk 表**（`values.py K_jerk_xp=[4,10,20,40,80]m` + lower/upper 插值，`acc_cmd` 里按 `mrr_leaddist`  interp）：按跟车距离限加加速度——纵向"速率 governor"拍板时的一个输入（我们现为时间域 comfort band）。
 4. **PC 回放环境**：M 芯片 Mac 可直跑 + 本地 segments——与控车无关，但可能替代部分设备端 replay 验证。
+
+### 3.5 mypilot 社区开源包（🐬 `/Users/wujiafu/Documents/op/openpilot-mypilot-community-dbcall`，2026-10-11 对照）
+
+BYD 全系+吉利的社区资产合集（说明文档自称含"厂商商业固件 PyArmor 明文还原"=与我们 §2 cp_byd **同源重复**，附 `server_connect.py` 授权校验佐证厂商 license 逻辑）。**唯一硬增量已吸收**：`byd_tangdm_radar.dbc` 0x351-354 槽位布局 → 雷达 A+B 落码（专档 §8.5.6，commit 5c1066e254）。其余登记如下，均不动控制行为：
+
+**吸收观察项（只登记）**：
+1. **距离域纵向平滑表**（`byd2/tuning.py K_ACCEL_BP=[40,50,60,70,80]m × K_ACCEL_POS/NEG_1..4BAR` 加减速百分比）：与 §3.4-MMX 项 3（K_jerk_xp）同一思路的**百分比衰减版本**——OP-long 速率 governor 拍板时两版对照输入。
+2. **HANDSOFF 周期微释放重接管**（`tuning.py HANDSOFF_ANGLE=[4,11,18]° HANDSOFF_PERIOD=[5,10,15]s`，治 D9/唐 离手久 EPS 退出）：与根因 18/守卫 C **同题不同解**（他们主动微释放再抢回，我们撤 Active 压重试）——仅作备选策略 #2 备案。
+3. **社区版宋 22 NN 模型**（`lat_models/BYD_SONG_PLUS_DMI_22.json`，2026-01 训练、test_loss 0.041）：**不入库**——本仓库 sunnypilot NNFC 目录已自带宋 22 模型（2025-01 训练、loss 0.031，更优且原生接线）；社区副本归档 `docs_site/byd_mypilot_assets/`（若放入 NNFC 扫描目录会被 similarity 路由抢选，禁止）。
+4. **功能面名单交叉印证**（高阶版 values.py）：`EXP_LONG_CAR`/`TORQUE_LAT_CAR` 含宋 21/22/23、`RADAR_CAR`=秦Pro/唐DM、`PT_RADAR_CAR`=汉/唐DMP/腾势/元——社区验证过"宋可跑纵向(原厂ACC)+力矩横向"，与我们路线一致；宋不在其任何雷达名单（§8.5.6 互证）。
+
+**不吸收项**：
+| 项 | 理由 |
+|---|---|
+| `BYD_Files/opendbc/safety/safety_byd.h` | 旧于我们移植版：无 echo-relay、无 LONGITUDINAL flag、checksum/counter 全 ignore；我们的含 safetyTxBlocked 看门狗 |
+| `byd源码/carcontroller` TTC 预测刹车/防画龙/0帧起步、`carcontroller(2).py` 增强滤波 | 社区启发式，与"厂商行为为基准"原则冲突；厂商代码已 100% 还原，行为基准取厂商 |
+| `BYD_Files/params.toml` LM_PARAMS | 全车系同一组 [2.2,2.5,0.145]，占位假数据 |
+| `Bydsong(1).dbc`/`generated(1).dbc`/`byd大全.dbc` | `MSG_xxx`+raw 字节无命名清单；宋报文覆盖以 415 段 rlog 实测为证更硬，仅作将来挖掘底账 |
+| `DISABLE_EPS_WARNING/TEMPORARY/PERMANENT` 三开关 | 屏蔽 EPS 故障与我们守卫方向相反（根因 18 教训=EPS 静默弃权必须硬停） |
+
+**风险旗**：社区 RelSpeed 单位混乱（dbc 标 km/s、代码原样当 m/s 传）；我们已按 KPH_TO_MS 落码留 TODO，**首帧真 IsValid=1 数据到手时钉死**。
+
+**待办（NNFF 互验）**：
+- [ ] sunnypilot 原生 `NeuralNetworkLateralControl` 参数开/关，对同一批段/路测跑 **siglin（现状=厂商表）vs NNFC（本地宋22模型）** 的 demand 扭矩 A/B（离线 replay 先行，对照 `NON_LINEAR_TORQUE_PARAMS`；差异大再议路测）。归档社区模型仅备三方对比用。
 
 ## 四、官方维修手册（ACC + MPC 分册）可吸收项
 
