@@ -245,3 +245,14 @@ class AssistLessLaneChange:
 6. 待办：
    - [ ] 8.5.4 **路测标定档位→米**：人工测 1-4 档实际车间距（GPS/雷达实测对照），定稿 `RADAR_HUD_BARS_TO_M`；标定后翻转 `interface.py` 的 radarUnavailable 即点亮（无其他改动）。
    - [ ] 8.5.5 后方方向不变：可及总线无 SRR 目标流（曾疑 0x2e0-2e8 块，复核为跨总线统计串入，bus1 无此地址）；要么 0x418 档位语义细化，要么设备探针（`radar_bus_probe.py` 补 bus3 与后方 SRR 两问）后评估引线代价。
+
+### 8.5.6 社区 mypilot 资产 + 槽位双路接口落码（2026-10-11 拍板 A+B）
+
+`/Users/wujiafu/Documents/op/openpilot-mypilot-community-dbcall`（🐬 mypilot 社区开源，BYD 全系+吉利，明文源码+DBC）补齐了最后一块：
+
+- **`byd2/byd_tangdm_radar.dbc`**：**0x351-354 = RADAR_TRACK_351..354**（MRR 4 轨迹槽 @25Hz，解析于 `CanBus.MRR=1`——正是宋的 bus1）：`LongDist 16|12@1- (0.06,-4)m`、`LatDist 28|10@1+ (0.05,-25.6)m`、`TrackID 38|6`、**`RelSpeed 44|10 (1,-512)`（dbc 标 km/s 显系笔误，社区代码原样当 m/s 传）**、`IsValid 56|1`。**用此布局反解宋的空载 payload `00002000e000`：LongDist=-4 下界、LatDist=-24 下界、IsValid=0——与"无有效目标占位帧"完全自洽**。据此修正 §8.5 第 2 条：宋 bus1 的 0x35x **就是**厂商 (849,852) 分支协议族，只是 MRR 从不向 bus1 输出有效目标；社区同样未把宋列入其雷达名单（`RADAR_CAR`=秦 Pro/唐 DM；`PT_RADAR_CAR`=汉/唐DMP/腾势/元 的 pt 域 0x374 `CID_NCBHOL`@60/100Hz；宋两者皆非）。
+- 同包其他雷达资产：`byd源码/radar_interface.py`（低阶明文版，0x374 @MPC 总线 TargetID **1左/2前/3右**，vRel=NaN）；**`EnableExtRadar`=外接 GM Continental 雷达方案**（0x460 header+0x461-0x474，直接用 `gm_global_a_object` dbc）——社区给"无可达内置雷达"车型的硬件外挂路径，宋纵向重建的现成第三选项；`比亚迪3/Bydsong(1).dbc`=宋整车原厂 DBC 数百报文**无雷达帧**（佐证宋可及总线本无目标流，非厂商私藏）；`byd2/byd_generic_pt.dbc` 含混淆名版 0x374（`CID_XXQFOZ`，与我们 BO_884 位序一致+两个附加位）。
+- **落码（A+B 完成）**：
+  - **A**：tangdm 布局 verbatim（含 0x352 LatDist 负号怪癖）入 `byd_general_pt.dbc` BO_ 849-852。
+  - **B**：`radar_interface.py` 双路——**track 优先（IsValid 过滤、RelSpeed 按 KPH_TO_MS 换算带 TODO、槽点 id 101-104 与 HUD 点 id=1 命名空间隔离、槽全失效即清）→ 无有效槽时回退 0x32D 档位合成**；track 总线静默不报 canError（仅 HUD 门控错误）。真帧一旦出现（引私有 CAN/AEB 工况/路测偶发），**零改动自动切真轨迹流并获得 vRel**。
+  - 验证：host **86/86**（81 基线+5 track 用例）；段 113 回放：bus1 实测 7240 帧解码全 IsValid=0（社区布局交叉验证✓）、HUD 回退 3620/3620 一致 0 错值（与上一 commit 行为等价）；`radarUnavailable` 仍 True→设备零变更。

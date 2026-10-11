@@ -1,82 +1,137 @@
-"""BYD Song Plus DM-i radar interface - HUD-synthesized single lead.
+"""BYD Song Plus DM-i radar interface: MRR track slots with HUD-bar fallback.
 
-Why this is not a target-list parser (docs/byd-lane-change.md §8.5, mined
-2026-10-11 over the 415-segment archive):
+Two sources, in priority order (docs/byd-lane-change.md §8.5):
 
-  * 0x374 RADAR_MRR: absent from every recorded bus.
-  * 0x351/0x354 (the IDs the vendor's decompiled radar_interface.py branches
-    parse for other BYD models): constant-payload idle heartbeats on bus 1,
-    AUC 0.5 between lead/no-lead regimes - the Song does not route targets
-    through them, so the vendor branch is deliberately not copied here.
-  * 0x380-0x38f: a 16-slot @15Hz block that initially looked like a target
-    list (per-slot regime "separation" up to AUC 0.86), but a multi-bar
-    ordinal test kills it: no byte/word is rank-consistent against the
-    0x32D distance bar across segments; the frames are a rolling-counter
-    status/telemetry table (shared same-tick byte1 across slots, per-slot
-    constants), not objects.
+  1. 0x351-0x354 RADAR_TRACK_35x on bus 1 - MRR target slots, ~25 Hz, layout
+     taken verbatim from the mypilot community byd_tangdm_radar.dbc (same IDs
+     the vendor's decompiled radar_interface parses for some BYD models).
+     On the Song these slots are logged across all 415 archive segments as
+     IsValid=0 placeholder frames (LongDist=-4 / LatDist=-24 floor values),
+     i.e. the MRR does not export targets onto bus 1 today - but the frames
+     ARE this protocol family, and the slot path auto-lights the moment a
+     real target stream is reachable (radar private CAN tap, or a duty state
+     like AEB that populates slots).
 
-What remains is the stock radar's own fused summary, already plaintext and
-validated: 0x32D ACC_HUD_ADAS (bus 2, 50 Hz) HasLead + LeadingDistance
-(0-7 gap bars). This interface turns it into one RadarPoint so radarState.
-leadOne has a real source. vRel/aRel are NaN (the vendor has no target speed
-either, per its decompiled interface, and a 3-bit bar cannot support
-differentiation without large sawtooth artifacts) - radard's lead Kalman
-filter on dRel is the intended consumer.
+  2. 0x32D ACC_HUD_ADAS on bus 2 - the stock radar's fused single-lead
+     summary (HasLead + LeadingDistance 0-7 gap bars). Always available;
+     used whenever no track slot is valid.
+
+Why the vendor branch is not copied: the vendor parses (849,852) or 884 per
+model with vRel/aRel=NaN. 0x374 never appears on the Song; the (849,852)
+branch is the same slot block we parse here, but we parse ALL FOUR slots with
+the community layout (the vendor keeps RelSpeed unused).
+
+RelSpeed unit caveat: the community dbc labels it km/s (obviously wrong) and
+its code passes the raw value (factor 1, offset -512) to vRel as m/s - an
+implausible +-512 m/s range, so we apply KPH_TO_MS as the physically sane
+reading. TODO(belabor): verify against the first real IsValid=1 frame.
 
 Status: inert by default. interface.py keeps CP.radarUnavailable=True until
-RADAR_HUD_BARS_TO_M is calibrated on-road; the moment that table is trusted,
-flipping the flag lights this up with no other change.
+RADAR_HUD_BARS_TO_M is calibrated on-road and a track source is live;
+flipping that flag is then the only change needed. Behavior today is
+unchanged (no parser, no liveTracks).
 """
-import math
-
 from opendbc.can import CANParser
 from opendbc.car import Bus, structs
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.byd.values import DBC, RADAR_HUD_BARS_TO_M
 from opendbc.car.interfaces import RadarInterfaceBase
 
 ACC_HUD_ADAS_MSG = 813  # 0x32D, bus 2
+TRACK_MSGS = [849, 850, 851, 852]  # 0x351-0x354, bus 1 (MRR slot block)
+TRACK_FREQ = 25
+TRACK_BUS = 1
+HUD_BUS = 2
+# track-slot point ids are namespaced away from the HUD fallback id so
+# switching sources mid-drive never aliases a KF-tracked point
+TRACK_ID_BASE = 101
+HUD_TRACK_ID = 1
 
 
-def _create_radar_can_parser(CP):
-  return CANParser(DBC[CP.carFingerprint][Bus.radar], [(ACC_HUD_ADAS_MSG, 50)], 2)
+def _create_track_can_parser(CP):
+  return CANParser(DBC[CP.carFingerprint][Bus.radar], [(addr, TRACK_FREQ) for addr in TRACK_MSGS], TRACK_BUS)
+
+
+def _create_hud_can_parser(CP):
+  return CANParser(DBC[CP.carFingerprint][Bus.radar], [(ACC_HUD_ADAS_MSG, 50)], HUD_BUS)
 
 
 class RadarInterface(RadarInterfaceBase):
   def __init__(self, CP, CP_SP):
     super().__init__(CP, CP_SP)
-    self.rcp = None if CP.radarUnavailable else _create_radar_can_parser(CP)
+    self.rcp_tracks = None if CP.radarUnavailable else _create_track_can_parser(CP)
+    self.rcp_hud = None if CP.radarUnavailable else _create_hud_can_parser(CP)
     self.updated_messages: set[int] = set()
-    self.trigger_msg = ACC_HUD_ADAS_MSG
+
+  def _update_tracks(self) -> bool:
+    """Refresh points from valid MRR slots. True if any slot is valid."""
+    any_valid = False
+    live_ids = set()
+    for i, addr in enumerate(TRACK_MSGS):
+      t = self.rcp_tracks.vl[addr]
+      if not t["IsValid_tang"]:
+        continue
+      any_valid = True
+      track_id = TRACK_ID_BASE + i
+      live_ids.add(track_id)
+      if track_id not in self.pts:
+        self.pts[track_id] = structs.RadarData.RadarPoint()
+        self.pts[track_id].trackId = track_id
+      pt = self.pts[track_id]
+      pt.dRel = t["LongDist_tang"]
+      # TODO(sign): confirm left/right convention against the first real
+      # frame; passed as-is from the community dbc (same choice as its own code)
+      pt.yRel = t["LatDist_tang"]
+      # TODO(unit): verify RelSpeed scale against the first real frame
+      pt.vRel = t["RelSpeed_tang"] * CV.KPH_TO_MS
+      pt.aRel = float('nan')
+      pt.yvRel = float('nan')
+      pt.measured = True
+    # slots that dropped or went invalid this cycle are stale (community _update
+    # keeps zero-filled invalid points; we drop them - radarState only wants
+    # targets). live_ids is empty when nothing is valid, so this also wipes the
+    # slot block the moment the last target leaves.
+    for track_id in list(self.pts.keys()):
+      if track_id >= TRACK_ID_BASE and track_id not in live_ids:
+        del self.pts[track_id]
+    return any_valid
+
+  def _update_hud(self) -> None:
+    vl = self.rcp_hud.vl[ACC_HUD_ADAS_MSG]
+    if vl["HasLead"] and vl["LeadingDistance"] in RADAR_HUD_BARS_TO_M:
+      if HUD_TRACK_ID not in self.pts:
+        self.pts[HUD_TRACK_ID] = structs.RadarData.RadarPoint()
+        self.pts[HUD_TRACK_ID].trackId = HUD_TRACK_ID
+      pt = self.pts[HUD_TRACK_ID]
+      pt.dRel = RADAR_HUD_BARS_TO_M[int(vl["LeadingDistance"])]
+      pt.yRel = 0.0
+      pt.vRel = float('nan')
+      pt.aRel = float('nan')
+      pt.yvRel = float('nan')
+      pt.measured = True
+    else:
+      self.pts.pop(HUD_TRACK_ID, None)
 
   def update(self, can_packets):
-    if self.rcp is None:
+    if self.rcp_hud is None:
       return super().update(can_packets)
 
-    # same (can_ptr, packets) shape card.py hands CarState; flatten for CANParser
-    changed = self.rcp.update(can_packets)
-    self.updated_messages.update(changed)
-    if self.trigger_msg not in self.updated_messages:
+    self.updated_messages.update(self.rcp_tracks.update(can_packets))
+    self.updated_messages.update(self.rcp_hud.update(can_packets))
+    if not (self.updated_messages & set(TRACK_MSGS) or ACC_HUD_ADAS_MSG in self.updated_messages):
       return None
     self.updated_messages.clear()
 
     ret = structs.RadarData()
-    if not self.rcp.can_valid:
+    # only the HUD parser is guaranteed present on the car's wired buses;
+    # the track block can be legitimately silent (e.g. radar powered down on
+    # some trims) so its timeout must not raise canError on its own
+    if not self.rcp_hud.can_valid:
       ret.errors.canError = True
       return ret
 
-    vl = self.rcp.vl[ACC_HUD_ADAS_MSG]
-    if vl["HasLead"] and vl["LeadingDistance"] in RADAR_HUD_BARS_TO_M:
-      if 1 not in self.pts:
-        self.pts[1] = structs.RadarData.RadarPoint()
-        self.pts[1].trackId = 1
-      self.pts[1].dRel = RADAR_HUD_BARS_TO_M[int(vl["LeadingDistance"])]
-      self.pts[1].yRel = 0.0
-      self.pts[1].vRel = float('nan')
-      self.pts[1].aRel = float('nan')
-      self.pts[1].yvRel = float('nan')
-      self.pts[1].measured = True
-    else:
-      self.pts.pop(1, None)
+    if not self._update_tracks():
+      self._update_hud()
 
     ret.points = list(self.pts.values())
     return ret

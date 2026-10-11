@@ -26,12 +26,14 @@ class CarInterface(CarInterfaceBase):
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
     ret.steerLimitTimer = 0.5
 
-    # No target-level radar stream exists on any recorded bus (docs/byd-lane-change.md
-    # §8.5): 0x374 absent, 0x351/0x354 idle heartbeats, 0x380-0x38f is a status
-    # table, not objects. RadarInterface instead synthesizes one lead from the
-    # stock radar's 0x32D HUD summary, but it stays inert until the bar->meters
-    # table (values.RADAR_HUD_BARS_TO_M) is calibrated on-road; flipping this
-    # flag is then the only change needed. Behavior today is unchanged.
+    # No valid MRR target exists on any recorded bus (docs/byd-lane-change.md
+    # §8.5): 0x374 absent, 0x380-0x38f is a status table, and the 0x351-354
+    # track slots on bus 1 are present but logged IsValid=0 only. RadarInterface
+    # parses those slots (community tangdm layout) and falls back to the 0x32D
+    # HUD bar synthesis; the slot path auto-lights if a real target stream ever
+    # appears (private-CAN tap / AEB duty). It stays inert until
+    # RADAR_HUD_BARS_TO_M is calibrated on-road; flipping this flag is then the
+    # only change needed. Behavior today is unchanged.
     ret.radarUnavailable = True
 
     # longitudinal control is done by the stock ACC; openpilot only does
