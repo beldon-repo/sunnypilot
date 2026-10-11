@@ -19,7 +19,7 @@ def hud_data(has_lead: bool, bar: int) -> bytes:
   return bytes(dat)
 
 
-def track_data(long_m: float, lat_m: float, rel_kmh: float, tid: int = 0, valid: bool = True) -> bytes:
+def track_data(long_m: float, lat_m: float, rel_kmh: float, tid: int = 1, valid: bool = True) -> bytes:
   # tangdm slot layout: LongDist 16|12@1- (0.06,-4), LatDist 28|10@1+ (0.05,-25.6),
   # TrackID 38|6, RelSpeed 44|10 (1,-512), IsValid 56|1
   dat = bytearray(8)
@@ -140,6 +140,11 @@ class TestTrackPriority:
     # next cycle: slot invalid, HUD lead present -> fallback point, track point gone
     feed(ri, True, 3, tracks=[track_data(0.0, 0.0, 0.0, valid=False), None, None, None])
     assert set(ri.pts) == {HUD_TRACK_ID}
+
+  def test_zero_track_id_is_empty_sentinel(self):
+    # vendor _update: track_id == 0 means the slot is empty even if IsValid set
+    out = feed(make_ri(False), True, 4, tracks=[track_data(15.0, 0.0, 0.0, tid=0, valid=True), None, None, None])
+    assert {p.trackId for p in out.points} == {HUD_TRACK_ID}
 
   def test_no_hud_frames_yet_reports_can_error(self):
     # HUD parser is the guaranteed bus; its silence (not track silence) gates errors

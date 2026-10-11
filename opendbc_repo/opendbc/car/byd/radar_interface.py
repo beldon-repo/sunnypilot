@@ -16,10 +16,13 @@ Two sources, in priority order (docs/byd-lane-change.md §8.5):
      summary (HasLead + LeadingDistance 0-7 gap bars). Always available;
      used whenever no track slot is valid.
 
-Why the vendor branch is not copied: the vendor parses (849,852) or 884 per
-model with vRel/aRel=NaN. 0x374 never appears on the Song; the (849,852)
-branch is the same slot block we parse here, but we parse ALL FOUR slots with
-the community layout (the vendor keeps RelSpeed unused).
+Vendor branch sets, extracted from the decompiled _create_radar_can_parser
+bytecode (co_names, 2026-10-11): {BYD_TANG_GAS, BYD_TANG_DM} parse (849,852)
+@25Hz on CanBus.BYD_AUX=bus 1 - this IS the tangdm slot protocol; the Song is
+in NEITHER vendor branch (no parser), because the MRR does not export targets
+on the Song's bus 1. We therefore parse all four slots ourselves with the
+community layout; the vendor's Tang-branch consumption is confirmed consistent
+(vRel = REL_SPEED * KPH_TO_MS, yRel clip +-5, track_id==0 sentinel).
 
 RelSpeed unit caveat: the community dbc labels it km/s (obviously wrong) and
 its code passes the raw value (factor 1, offset -512) to vRel as m/s - an
@@ -69,7 +72,8 @@ class RadarInterface(RadarInterfaceBase):
     live_ids = set()
     for i, addr in enumerate(TRACK_MSGS):
       t = self.rcp_tracks.vl[addr]
-      if not t["IsValid_tang"]:
+      # vendor _update: track_id == 0 is the empty-slot sentinel
+      if not t["IsValid_tang"] or t["TrackID_tang"] == 0:
         continue
       any_valid = True
       track_id = TRACK_ID_BASE + i
@@ -79,10 +83,10 @@ class RadarInterface(RadarInterfaceBase):
         self.pts[track_id].trackId = track_id
       pt = self.pts[track_id]
       pt.dRel = t["LongDist_tang"]
-      # TODO(sign): confirm left/right convention against the first real
-      # frame; passed as-is from the community dbc (same choice as its own code)
-      pt.yRel = t["LatDist_tang"]
-      # TODO(unit): verify RelSpeed scale against the first real frame
+      # vendor clips LAT_DIST to +-5 m; TODO(sign): confirm left/right convention
+      # against the first real frame (passed as-is, same choice as the community)
+      pt.yRel = max(-5.0, min(5.0, t["LatDist_tang"]))
+      # vendor Tang branch: vRel = REL_SPEED * KPH_TO_MS (bytecode-confirmed)
       pt.vRel = t["RelSpeed_tang"] * CV.KPH_TO_MS
       pt.aRel = float('nan')
       pt.yvRel = float('nan')

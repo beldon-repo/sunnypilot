@@ -119,7 +119,7 @@ BYD 全系+吉利的社区资产合集（说明文档自称含"厂商商业固�
 | `Bydsong(1).dbc`/`generated(1).dbc`/`byd大全.dbc` | `MSG_xxx`+raw 字节无命名清单；宋报文覆盖以 415 段 rlog 实测为证更硬，仅作将来挖掘底账 |
 | `DISABLE_EPS_WARNING/TEMPORARY/PERMANENT` 三开关 | 屏蔽 EPS 故障与我们守卫方向相反（根因 18 教训=EPS 静默弃权必须硬停） |
 
-**风险旗**：社区 RelSpeed 单位混乱（dbc 标 km/s、代码原样当 m/s 传）；我们已按 KPH_TO_MS 落码留 TODO，**首帧真 IsValid=1 数据到手时钉死**。
+**风险旗**：社区 RelSpeed 单位混乱（dbc 标 km/s、代码原样当 m/s 传）；我们按 KPH_TO_MS 落码——10-11 夜厂商 bytecode 证实 **Tang 分支 `vRel=REL_SPEED×KPH_TO_MS`**（专档 §8.5.6），换算方向与厂商一致，仅剩 dbc 的 factor/offset 数值待首帧真 IsValid=1 数据核对。
 
 **待办（NNFF 互验）**：
 - [ ] sunnypilot 原生 `NeuralNetworkLateralControl` 参数开/关，对同一批段/路测跑 **siglin（现状=厂商表）vs NNFC（本地宋22模型）** 的 demand 扭矩 A/B（离线 replay 先行，对照 `NON_LINEAR_TORQUE_PARAMS`；差异大再议路测）。归档社区模型仅备三方对比用。
