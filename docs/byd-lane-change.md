@@ -204,7 +204,7 @@ class AssistLessLaneChange:
 用户路测反馈"打灯变道又没有根据雷达判断后方有车才变道"。对 415 段存档 rlog 全量审计（§八工具），事实链：
 
 1. **门控存在且在工作**：70 次 `laneChangeStarting` 发起帧，**同侧 blindspot=1 的 0 次**；`laneChangeBlocked` 事件 20 次。`desire_helper.py` 的 `blindspot_detected` 拦截（§二 stock 路径）不是纸面代码。
-2. **但它只有一只 10Hz 的眼睛**：`BSD_RADAR` 0x418 的 LEFT/RIGHT_APPROACH（2-bit，值域实测 0/1/2，rare 2）是**全部**后方来车输入——415 段里 `RADAR_MRR` 0x374 **0 帧**（录制 bus 上根本不存在）；厂商 fork 同样只用 CS.blindspot（其 radar_interface.py 未解密、controls 层拦截=原生 BSD 位），carrot 移植同样 `radarUnavailable=True`。**结论：当前平台拿不到目标级"后方多远/多快接近"，BSD 位只覆盖"已进入盲区警告圈"——后方远处快速接近的车在 BSD 亮之前，系统视之为安全。**
+2. **但它只有一只 10Hz 的眼睛**：`BSD_RADAR` 0x418 的 LEFT/RIGHT_APPROACH（2-bit，值域实测 0/1/2，rare 2）是**全部**后方来车输入——415 段里 `RADAR_MRR` 0x374 **0 帧**（录制 bus 上根本不存在）；厂商 fork 同样只用 CS.blindspot（其 radar_interface.py 未解密、controls 层拦截=原生 BSD 位），carrot 移植同样 `radarUnavailable=True`。**结论：当前平台拿不到目标级"后方多远/多快接近"，BSD 位只覆盖"已进入盲区警告圈"——后方远处快速接近的车在 BSD 亮之前，系统视之为安全。**（**10-11 勘误：本条中"radar_interface.py 未解密"与"宋线束仅 bus0/2"两点已被 §8.5 推翻；对"后方"目标级数据的缺失结论仍成立。**）
 3. BSD 帧占：carState blindspot-true 19.66%（(1,0) 左 44504 / (0,1) 右 58605 / (1,1) 17674 帧）；60+ 次瞬态（0.07-0.15s hold）右发起是旧映射 bug 产物，映射已修（839d871ae8）。
 
 ### 8.2 落码（`selfdrive/controls/lib/desire_helper.py`，全车型生效、BYD 设备实测）
@@ -224,7 +224,24 @@ class AssistLessLaneChange:
 
 ### 8.4 雷达挖掘待办（根治"后方远处来车"，设备上线后）
 
-- [ ] **T7 设备探针**：`tools/byd/radar_bus_probe.py`（只收不发，bus0-3 全量报文频率表+未知发送者标记）。先停栈防 canerd 占 panda；宋线束现仅接 bus0/2——**bus1/3 若为 0 帧本身就是结论**（雷达不在可及总线，要评估引线的物理代价）。
-- [ ] T8 找到目标流后：入 dbc→（可选 radar_interface/radarState 或新增车型侧信号）→ starting 前做距离+接近速度门控（参照 stock `can_change_lane` 语义，本仓库已无该函数，需自建）。
+- [x] ~~T7 设备探针~~ **10-11 已被日志回放代答（§8.5）**：bus1 有流量（"仅 bus0/2"错误），前向 MRR 目标流候选 0x380-38f 已在档内；bus3 与"后方 SRR 目标流是否在可及总线"仍待设备探针补一答（`tools/byd/radar_bus_probe.py` 保留可用）。
+- [ ] T8 找到目标流后：入 dbc→（可选 radar_interface/radarState 或新增车型侧信号）→ starting 前做距离+接近速度门控（参照 stock `can_change_lane` 语义，本仓库已无该函数，需自建）。**10-11 进度：前向 0x38x 挖掘与入库见 §8.5 待办；后方若证实无目标流，T8 退化为"BSD 档位语义精细化"（0x418 2-bit 的 1 vs 2）。**
 - [ ] T9 复测 §8.2 三行为（路测）：①满窗才起 ②途中亮盲区=回原车道+blocked 提示 ③连续变道二次确认；顺带回归 10-09 拨杆集合判 2/3 左、4/5 右。
 - 语义留白：0x418 2-bit 的 1 vs 2 档位含义未知（实测 2 值仅 0.05% 帧）；若路测证实"2=紧迫"，可把发起条件收紧为特定档位而 bool 保留中止。BSD 19.66% 帧占意味着正常跟车就可能常亮——路测若发现 0.5s 窗频繁延误发起，回来重定 `LANE_CHANGE_CLEAR_TIME_MIN` 或改用档位语义。
+
+### 8.5 雷达回放挖掘：bus1 目标流发现（2026-10-11，用户确认档案含跟车记录后重挖）
+
+语料=415 段 rlog；真值=0x32d ACC_HUD_ADAS 的 HasLead(bit9)/LeadingDistance(bit13-15, 0-7 档)——**301/415 段存在跟车**，其中 69 段"有/无前车"两状态各 >800 帧。回放扫描实证：
+
+1. **bus1 有流量（勘误"仅 bus0/2"）**：~110 个地址，含 0x101-0x10a（~28Hz）、0x350-354（~30Hz）、**0x380-0x38f（16 帧槽 @15Hz）**、0x3c8-3ca、扩展帧 0x7fe7a00。
+2. **0x350-354 = 空载心跳，非目标流**：payload 恒（0x350 恒 `00f0ffffff1f`、0x351-354 恒 `00002000e000`），首 2 字节为滚动 CRC/tick（byte1 同拍跨地址共享→单一发送 ECU）；跟车/无车两状态分布 AUC=0.5。**厂商 radar_interface.py 已反编译**（`cp_byd/.../byd/radar_interface.py.decompiled.py`：EnableRadarTracks 门控、分支解析 849/852(=0x351/0x354) 或 884(=0x374)、字段 TRACK_ID/VALID/LONG_DIST/LAT_DIST、**vRel/aRel=nan 即厂商自己也没有目标速度**），但**宋不走这两个分支**（0x374 全档 0 帧、0x351-354 恒空载）→ 自建接口不套厂商分支（10-11 拍板）。
+3. **~~前向目标流候选~~ → 0x380-0x38f 证伪（10-11 二轮位级检验）**：首轮"状态分离分"（0x380 LE@2=0.856 等）被 **92 个"档位≥3 档且各≥150 帧"段的逐档中位数单调检验推翻**——没有任何字段跨段一致随 0x32d 档位单调（同槽字段换个段就反号）；字节形态 = **b0/b1 严格滚动计数器（b1 恒 +17/帧 mod 256、同拍跨槽共享→单一发送 ECU）+ 逐槽常量（如 b3=0xFA 系、b2=0x80 系、b4=0xF8/0x80 系）+ 校验噪声**，是**状态/遥测表**特征，非目标列表。分离分是计数器新鲜度与档位的时段共现伪影。
+4. **最终判定：宋的任何已录总线上都不存在目标级雷达流（前后向皆无）**，"日志回放解密目标流"此路不通。前向可用的只有 0x32D 融合摘要（HasLead+LeadingDistance 0-7 档，实测跟车段以 3-4 档为主）。与厂商 fork 只用 blindspot 位、carrot `radarUnavailable=True` 互证。工具留档 `tools/byd/radar_layout_mine.py`（引新总线后可复用）。
+5. **入库落地（8.5.2 完成，形态修正）**：
+   - `opendbc/car/byd/radar_interface.py`（新）：**0x32D 档位合成单目标 leadOne**（dRel=档位表值、yRel=0、vRel/aRel=NaN——与厂商同缺口），显式不套厂商 849/852/884 分支（宋不走那些 ID）；`values.py` dbc_dict 增 `Bus.radar: byd_general_pt`；`interface.py` 挂 `RadarInterface`。
+   - **默认惰性**：`ret.radarUnavailable` 保持 True → RI 无 parser、liveTracks 不发布、控制行为零变更（v2 路测前不动控制原则）。
+   - `RADAR_HUD_BARS_TO_M`（values.py）= 占位档位→米表（1:6 2:13 3:22 4:35 5:50 6:70 7:90m）。
+   - 测试 `selfdrive/car/tests/test_byd_radar_interface.py` 6 例（真 CANParser 位序回归+惰性+清槽）；host 回归 **81/81**（75 基线+6）。rlog 回放段 113：3620 返回帧，lead→单点 100% 一致、0 错值、0 无中生有。
+6. 待办：
+   - [ ] 8.5.4 **路测标定档位→米**：人工测 1-4 档实际车间距（GPS/雷达实测对照），定稿 `RADAR_HUD_BARS_TO_M`；标定后翻转 `interface.py` 的 radarUnavailable 即点亮（无其他改动）。
+   - [ ] 8.5.5 后方方向不变：可及总线无 SRR 目标流（曾疑 0x2e0-2e8 块，复核为跨总线统计串入，bus1 无此地址）；要么 0x418 档位语义细化，要么设备探针（`radar_bus_probe.py` 补 bus3 与后方 SRR 两问）后评估引线代价。

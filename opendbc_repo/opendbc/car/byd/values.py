@@ -174,7 +174,12 @@ class BYDCarSpecs(CarSpecs):
 
 @dataclass
 class BYDPlatformConfig(PlatformConfig):
-  dbc_dict: DbcDict = field(default_factory=lambda: {Bus.pt: 'byd_general_pt'})
+  # Bus.radar reuses the pt dbc file: the Song's only usable forward-traffic
+  # summary is 0x32D ACC_HUD_ADAS on bus 2 (see radar_interface.py and
+  # docs/byd-lane-change.md §8.5 - no target-level stream exists on any
+  # recorded bus), and that message is defined in byd_general_pt.
+  dbc_dict: DbcDict = field(default_factory=lambda: {Bus.pt: 'byd_general_pt',
+                                                     Bus.radar: 'byd_general_pt'})
 
 
 class CAR(Platforms):
@@ -195,3 +200,13 @@ DBC = CAR.create_dbc_map()
 # which is what made "set 65 -> actually ~76 on the cluster" (cluster adds
 # its usual ~+4%). 10/9 corrects vEgo to true speed.
 HUD_MULTIPLIER = 10 / 9
+
+# HUD-synthesized radar lead: gap-bar midpoint distances, meters (bar 1=near
+# .. 7=far, per 0x32D LeadingDistance VAL_ semantics of SetDistance 1BAR..4BAR).
+# PLACEHOLDERS - 415 logged segments only ever show bars 1-4 (mostly 4), so
+# absolute meters are unmeasurable offline; calibrate on-road with measured
+# stand-off gaps at each bar before anything control-relevant reads these.
+# RadarInterface only exposes the value; no control path uses it while
+# CP.radarUnavailable stays True (interface.py).
+RADAR_HUD_BARS_TO_M: dict[int, float] = {1: 6.0, 2: 13.0, 3: 22.0, 4: 35.0,
+                                         5: 50.0, 6: 70.0, 7: 90.0}

@@ -2,12 +2,14 @@ from opendbc.car import get_safety_config, structs
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.byd.carcontroller import CarController
 from opendbc.car.byd.carstate import CarState
+from opendbc.car.byd.radar_interface import RadarInterface
 from opendbc.car.byd.values import HUD_MULTIPLIER, USE_ANGLE_STEERING, BydSafetyFlags, CarControllerParams
 
 
 class CarInterface(CarInterfaceBase):
   CarState = CarState
   CarController = CarController
+  RadarInterface = RadarInterface
 
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
@@ -24,6 +26,12 @@ class CarInterface(CarInterfaceBase):
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
     ret.steerLimitTimer = 0.5
 
+    # No target-level radar stream exists on any recorded bus (docs/byd-lane-change.md
+    # §8.5): 0x374 absent, 0x351/0x354 idle heartbeats, 0x380-0x38f is a status
+    # table, not objects. RadarInterface instead synthesizes one lead from the
+    # stock radar's 0x32D HUD summary, but it stays inert until the bar->meters
+    # table (values.RADAR_HUD_BARS_TO_M) is calibrated on-road; flipping this
+    # flag is then the only change needed. Behavior today is unchanged.
     ret.radarUnavailable = True
 
     # longitudinal control is done by the stock ACC; openpilot only does
