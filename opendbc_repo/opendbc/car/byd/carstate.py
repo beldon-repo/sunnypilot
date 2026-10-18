@@ -2,6 +2,7 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
+from opendbc.car.byd.radar_gap import RadarGapMonitor
 from opendbc.car.byd.values import DBC, CarControllerParams
 
 # Boot-mid-cruise engage hold (see the latch block in update): when the device
@@ -76,6 +77,17 @@ class CarState(CarStateBase):
     self.radar_acc_msg = {}
     self.adas_msg = {}
     self.aeb_msg = {}
+
+    # BYD T8 forward-gap monitor (docs/byd-radar-010x.md §④e/§④f): its OWN
+    # CANParser for bus1 0x109/0x10A, driven by CarInterface.update. Kept
+    # outside get_can_parsers on purpose - the base aggregates canValid/
+    # canTimeout over those dicts, and bus1 availability must not start
+    # emitting CAN FAULTED on trims whose MRR stays silent. Telemetry only
+    # until the BydRadarGapGate param flips (road-test gate, desire_helper).
+    self.gap_cp = None
+    if Bus.radar in DBC[CP.carFingerprint]:
+      self.gap_cp = CANParser(DBC[CP.carFingerprint][Bus.radar], [(265, 25), (266, 25)], 1)
+    self.gap_mon = RadarGapMonitor()
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
@@ -305,3 +317,20 @@ class CarState(CarStateBase):
       Bus.pt: CANParser(dbc, pt_messages, 0),
       Bus.adas: CANParser(dbc, adas_messages, 2),
     }
+
+  def update_radar_gap(self, can_packets, v_ego: float) -> tuple[bool, bool]:
+    """BYD T8 (docs/byd-radar-010x.md): feed the bus1 gap monitor. Called once
+    per card step (100 Hz) from CarInterface.update. Returns (closing, new)."""
+    if self.gap_cp is None:
+      return False, False
+    updated = self.gap_cp.update(can_packets)
+    fresh = 265 in updated
+    # dbc LongDist_109 carries the HYPOTHESIS feet factor; the monitor is
+    # u-free, so undo the scaling back to raw counts (docs §④b: unit pinned
+    # only by the road test - no meters anywhere in this path)
+    b7 = int(round(self.gap_cp.vl[265]["LongDist_109"] / 0.3048))
+    presence = int(self.gap_cp.vl[266]["Presence_10A"])
+    hud = self.adas_msg
+    cls = int(hud.get("HasLead", 0)) * int(hud.get("LeadingDistance", 0))
+    self.gap_mon.update(0.01, b7, presence, cls, float(v_ego), fresh)
+    return self.gap_mon.closing, self.gap_mon.new_target

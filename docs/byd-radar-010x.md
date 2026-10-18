@@ -1,4 +1,4 @@
-> **状态(2026-10-18,当日四次更新:挖掘→复验→跟停收口→夜间全帧续探④)**:逆向定案草案;六帧已入库 byd_general_pt.dbc(**HYPOTHESIS 标注、无任何在车 CANParser 实例化**);b0 CRC 已破(SAE J1850);单位候选收口为 **feet 0.3048 vs 0.25 二选一**(1.0/0.5/0.45 均被 13 起跟停事件的硬上界 u≤0.42-0.44 排除),路测实测驻停距定夺,控制行为零变更(路测门禁不变)。数据=docs_site/hour_logs(2026-09-28 控车 4 段全量 rlog)+ docs_site/byd_logs_2026-10-05_07(415 段)+ 当日 415 段全量复跑(见「定案补录」)。工具=tools/byd/{radar_re_mine.py(MI 挖掘),radar_0109_validate.py(416 段跨段检验,/tmp/radar_0109_1005.json),radar_415_diversity.py(415 段多样性/回声终检,/tmp/radar_415_diversity.{txt,json}),radar_sup_mine.py(can2 监督拟合),radar_echo_probe/radar_echo_checks.py(回声审查),radar_unit_check*.py(单位审查),radar_unit_pin.py+radar_unit_aggregate.py(486 段静止逼近/翻转回归/CRC 试打,/tmp/up_*.json),radar_stop2lead.py(13 起跟停等式标定,/tmp/radar_stop2lead.json),radar_seg_extract.py(全帧缓存 8B×六帧→/tmp/seg1005.pkl,配套 radar_seglib.py),radar_247_census.py(/tmp/radar_247.txt),radar_tau_fit.py(/tmp/radar_tau.txt),radar_b6_model.py(/tmp/radar_b6.txt/.json),radar_t8_lead.py(/tmp/radar_t8.txt),radar_presence_fresh.py(/tmp/radar_pf.txt)}。本文推翻 docs/byd-lane-change.md §8.5.7 中「0x101-0x10A=状态广播」对 0x109 b7 的判定,其余维持。
+> **状态(2026-10-18,当日五次更新:挖掘→复验→跟停收口→夜间全帧续探④→T8 落码⑤(BydRadarGapGate 默认 0,行为仍零变更))**:逆向定案草案;六帧已入库 byd_general_pt.dbc(**HYPOTHESIS 标注、无任何在车 CANParser 实例化**);b0 CRC 已破(SAE J1850);单位候选收口为 **feet 0.3048 vs 0.25 二选一**(1.0/0.5/0.45 均被 13 起跟停事件的硬上界 u≤0.42-0.44 排除),路测实测驻停距定夺,控制行为零变更(路测门禁不变)。数据=docs_site/hour_logs(2026-09-28 控车 4 段全量 rlog)+ docs_site/byd_logs_2026-10-05_07(415 段)+ 当日 415 段全量复跑(见「定案补录」)。工具=tools/byd/{radar_re_mine.py(MI 挖掘),radar_0109_validate.py(416 段跨段检验,/tmp/radar_0109_1005.json),radar_415_diversity.py(415 段多样性/回声终检,/tmp/radar_415_diversity.{txt,json}),radar_sup_mine.py(can2 监督拟合),radar_echo_probe/radar_echo_checks.py(回声审查),radar_unit_check*.py(单位审查),radar_unit_pin.py+radar_unit_aggregate.py(486 段静止逼近/翻转回归/CRC 试打,/tmp/up_*.json),radar_stop2lead.py(13 起跟停等式标定,/tmp/radar_stop2lead.json),radar_seg_extract.py(全帧缓存 8B×六帧→/tmp/seg1005.pkl,配套 radar_seglib.py),radar_247_census.py(/tmp/radar_247.txt),radar_tau_fit.py(/tmp/radar_tau.txt),radar_b6_model.py(/tmp/radar_b6.txt/.json),radar_t8_lead.py(/tmp/radar_t8.txt),radar_presence_fresh.py(/tmp/radar_pf.txt),radar_t8_replay.py(T8 落码验收回放,/tmp/radar_t8_replay.txt);实现=opendbc/car/byd/radar_gap.py+carstate/interface 接线+desire_helper 门控+test_byd_radar_gap.py}。本文推翻 docs/byd-lane-change.md §8.5.7 中「0x101-0x10A=状态广播」对 0x109 b7 的判定,其余维持。
 
 # BYD 宋 bus1 0x10x 雷达字段逆向定案草案
 
@@ -70,6 +70,14 @@
 - 原「4 段卡死 100%」之首 --234:窗口内 **vEgo 恒 0 + b7 冻结在 15 = 静止前车驻停平台**(与 13 起跟停事件的 15c 平台同值,feet 4.6m/0.25 3.7m)——卡住的是 HUD HasLead,不是雷达。--142(b7=41 平 62s)、7a78691537--6x 系(b7 方差 4-20)皆为真实雷达可见目标。
 - 过滤规则收敛为 **presence==7 AND b7>0**(纯「有在位无距离」ghost 在本库 0 例);「自车在动 + b7 冻结」的危险形态全库未出现,留作路测观察项。
 
+## ⑤ T8 落码(2026-10-18 深夜,门控默认关=启用走路测)
+
+- **链路**:BYD CarState 自带独立 CANParser 解 265/266(bus1,`update_radar_gap` 由 CarInterface.update 以 100Hz 驱动)→ **刻意不进 get_can_parsers**,canValid/canTimeout 聚合不受 bus1 影响 → `RadarGapMonitor`(opendbc/car/byd/radar_gap.py):u-free r=b7/vEgo 对分档下界 {2:1.99,3:3.86,4:5.70} c/(m/s) 做**向下穿越+斜率(≥0.2/s)+0.5s 去抖+1.0s 迟滞**判定,过滤=④f(presence==7 AND b7>0)且 b7≤245(④a 边缘带不可信);b7 由 dbc feet 因子还原为原始计数(单位不进此路)→ `CarState.radarGapClosing @61 / radarGapNew @62`(运行时 capnp,设备可直接 OTA)→ desire_helper 三级 `BydRadarGapGate` raw param(0=关,默认;**1**=closing 等同盲区命中重置 clear 窗+警中禁发起;**2**=追加"变道中冒出新目标且正在逼近"starting abort)。
+- **abort 语义保守化**:仅新目标退——0x109 无 yRel(b3 UNKNOWN),本车道逼近(该继续躲)与目标车道逼近(该退)不可分,退回本车道撞向逼近车是更坏猜测;丢失方向同拍(④e)永不作为放行依据;finishing 不 abort(10-11 纪律)。
+- **常数定标**(tools/byd/radar_t8_replay.py,415 段缓存回放,/tmp/radar_t8_replay.txt):稳态 hold 误阻塞 **8.3%**(④e 静态阈 29-60% 的一个数量级以下;分布偏态 med=0/p90=26.7%);closing 翻转预警覆盖 **4→3 33.3%(91/273)、3→2 22.9%(22/96)**,捕获事件提前翻转中位 **4.8s**(p10 1.4/p90 12.9);告警 22 次/h、新目标 41 次/h;opening 方向"误捕"9% 为 8s 窗内相邻 closing 重叠非独立误报。扫描过 margin 0.12/0.05、set_t 0.4/0.5/0.8、slope 0.15/0.2/0.3 取平衡组。
+- **测试**:selfdrive/car/tests/test_byd_radar_gap.py **18 例**(穿越/去抖/迟滞/低噪摆动不误报/存在位/247 带/新目标时效/CarState 真解码/gate0 行为逐字节不变+gate1 阻止发起+gate2 新目标 abort/旧目标不退);host runner 全套 **105/105**、byd dbc/carstate 套件 **38/38**;radar_interface 主源、values.py、控制路径未动。
+- **待办**:路测先开 gate=1 观察阻塞体验与告警时机(对照 b7/驻停距实测量一并钉单位)→ 视情 gate=2;后方数据源缺口与 T7 设备探针不在本门控覆盖内。
+
 ## 证据链(416 段报告 + 三方审查)
 - **档位单调分离**:113/415 段含全三档(≥50 帧),0x109 b7 跨段 mean(c4)>mean(c3)>mean(c2) 严格占 90.3%(102/113);类均值 c0/c2/c3/c4 = 1.35/31.2/49.7/112.9。同项 0x101 b7 仅 24.8%、c0 均值 30.6 非零——0x101 b7 不是该距离字段。
 - **无目标归零**:0x109 b7 class-0 零率 96.3%(279985/290824),f8_8/f9_12 整段恒 0(uniq=1)——时间滚动计数器不可能;残留 3.7%(10839 帧,max 247)为捕获/丢失瞬态。
@@ -99,7 +107,7 @@
 5. 0x32D 档位合成仍成立——b7 领先 0x32D 是上下游关系,非冲突;审2 定位翻转时刻精确吻合(±0.01s)。
 
 ## 落地建议
-- **T8 距离门控**:用 0x109 b7 作 0x32D 档位上游的连续量,给 BSD 0.5s 发起前 clear 窗与 starting 途中 abort 提供"逼近速率/穿档提前量"增量——但单位未钉,先只做**单调性与相对序**检测(闭合判定、提前于档位翻越),标定后再升级米制阈值;c0 瞬态与 247 须按 lead 配对窗过滤。**④e 已给设计数字**:越界领先翻转 309/309(100%)、翻转时刻 b7 只走完平台 37-59%(提前量常超 8s 回看窗,须自适应);丢失路 0.02s 同拍无提前量(clear 窗的「消失」方向不能靠 b7);捕获路 b7 领先 ≥10s;单一静态阈值误穿 29-60% → 必须新旧平台自适应穿越+迟滞/去抖,禁固定计数阈。窗过滤按④f=presence==7 AND b7>0。
+- **T8 距离门控**:用 0x109 b7 作 0x32D 档位上游的连续量,给 BSD 0.5s 发起前 clear 窗与 starting 途中 abort 提供"逼近速率/穿档提前量"增量——但单位未钉,先只做**单调性与相对序**检测(闭合判定、提前于档位翻越),标定后再升级米制阈值;c0 瞬态与 247 须按 lead 配对窗过滤。**④e 已给设计数字**:越界领先翻转 309/309(100%)、翻转时刻 b7 只走完平台 37-59%(提前量常超 8s 回看窗,须自适应);丢失路 0.02s 同拍无提前量(clear 窗的「消失」方向不能靠 b7);捕获路 b7 领先 ≥10s;单一静态阈值误穿 29-60% → 必须新旧平台自适应穿越+迟滞/去抖,禁固定计数阈。窗过滤按④f=presence==7 AND b7>0。**⑤ 已按此实现落码(门控默认关,路测启用)**。
 - **track 路**:不可整路改接(无 vRel);可选建"0x109 dist + dt 差分 vRel(25Hz,噪声大)"中间路,track 槽继续默认惰性。
 - **DBC**:**已入库**(2026-10-18,任务③):byd_general_pt.dbc BO_ 257/258/261/262/265/266,头部保留 HYPOTHESIS 注释与单位未钉声明,命名对齐 `_tang` 角色_来源风格(后缀取帧号 _109/_10A 等,避开与 0x35x 混淆的 _mrr);详见「定案补录③」,消费端=无(回归测试 test_byd_radar_010x_dbc.py)。
 - **门禁**:维持"路测验证前不动控制行为"——设备 T7-T9 探针 + 415 全量重跑审2(a)(c)检 + 一次已知车距标定,三件齐前 radar_interface 主源不变。
@@ -115,4 +123,4 @@
 8. **已销账(④c)**——b6/b7「平行递减/粗细分解」假说在 10-05_07 全库证伪:b6 纯二值 {0x7F,0xFF}(676035 帧无第三值、仅 bit7 之差),不含距离;-6/-12 偏置属 hour_logs 特定观察或误读,不再建模。
 9. 既有依赖 HUD_BARS_TO_M 换算的代码路径整体存疑。
 10. **已销账**——415 段全量解析 0 致命错误(3 条 Corrupted-events 警告未阻断)。
-11. **新增注意**——dbc 已入库但零消费端:任何路径若要读 257-266,须先过路测钉 u + presence 新鲜度过滤,并补 T7-T9 设备探针结论。
+11. **更新(⑤)**——265/266 现由 BYD CarState 的独立 gap parser 解析(遥测+门控输入),不再"零消费端";但控制读取三级门控 `BydRadarGapGate` **默认 0=行为不变**,路测钉 u+开 gate1 前禁止升级;257/258/261/262 仍无消费者。原纪律(先路测钉 u、presence 新鲜度过滤已按④f 落实=presence AND b7>0)不变。

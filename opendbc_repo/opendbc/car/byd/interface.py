@@ -11,6 +11,14 @@ class CarInterface(CarInterfaceBase):
   CarController = CarController
   RadarInterface = RadarInterface
 
+  def update(self, can_packets):
+    ret, ret_sp = super().update(can_packets)
+    # T8 gap monitor rides the bus1 parser owned by CarState (see the note in
+    # carstate init: deliberately outside can_parsers, canValid/canTimeout are
+    # NOT affected). Fields are telemetry until desire_helper gates on them.
+    ret.radarGapClosing, ret.radarGapNew = self.CS.update_radar_gap(can_packets, ret.vEgo)
+    return ret, ret_sp
+
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = "byd"

@@ -227,6 +227,12 @@ struct CarState {
   leftBlindspot @33 :Bool;  # Is there something blocking the left lane change
   rightBlindspot @34 :Bool; # Is there something blocking the right lane change
 
+  # BYD T8 forward-radar gap monitor (docs/byd-radar-010x.md §落地建议/T8,
+  # design stats §④e/§④f): 0x109 b7 closing across its HUD-gear band boundary.
+  # Telemetry only - consumers behind the BydRadarGapGate param (default off).
+  radarGapClosing @61 :Bool;  # gap ratio r=b7/vEgo crossed the band's lower boundary downward, debounced
+  radarGapNew @62 :Bool;      # target newly became radar-visible (capture leads the HUD gear by >=10 s)
+
   fuelGauge @41 :Float32; # battery or fuel tank level from [0.0, 1.0]
   charging @43 :Bool;
 

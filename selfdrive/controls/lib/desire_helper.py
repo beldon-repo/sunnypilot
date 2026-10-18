@@ -26,6 +26,24 @@ LANE_CHANGE_TIME_MAX = 10.
 # to stay continuously clear this long in preLaneChange before starting.
 LANE_CHANGE_CLEAR_TIME_MIN = 0.5
 
+# BYD T8 (docs/byd-radar-010x.md §④e/§④f): 0x109 b7 boundary-cross monitor as
+# an extra upstream input to the gates above. Three levels via the
+# BydRadarGapGate raw param (device default 0 = behavior byte-for-byte
+# unchanged until the road test):
+#   1 - while the gap is closing across its band, treat it like a blindspot
+#       hit for the clear window: reopen it, and never start mid-alert.
+#       (④e: b7 crossed the plateau midpoint before 309/309 gear flips, and
+#        capture leads the HUD by >=10 s - the alert is EARLIER than anything
+#        the HUD-gear path could ever see.)
+#   2 - additionally abort laneChangeStarting on a NEW target that is closing:
+#       radar-visible was false at the start edge and the cone swept in a
+#       fast-closing car ahead. A target that was already visible before the
+#       start does NOT abort - without yRel (b3 UNKNOWN) we cannot tell
+#       "target-lane car we are diving in front of" from "own-lane car we are
+#       escaping", and swinging back across the line toward the latter is the
+#       worse failure. laneChangeFinishing is never aborted (10-11 discipline).
+RADAR_GAP_LEVEL_MAX = 2
+
 DESIRES = {
   LaneChangeDirection.none: {
     LaneChangeState.off: log.Desire.none,
@@ -81,6 +99,9 @@ class DesireHelper:
     # stays off at any speed (vendor's disable intent; their un-decrypted DesireHelper
     # wrapper semantics can't be inspected, docs/byd-lane-change.md §三)
     self.lane_change_assist_speed_ms = speed_mph * CV.MPH_TO_MS if speed_mph > 0 else float("inf")
+    # T8 gate level, same raw-params fallback (the prebuilt params_pyx.so knows
+    # neither key); 0 until /data/params/d/BydRadarGapGate is written on-road
+    self.radar_gap_gate = min(RADAR_GAP_LEVEL_MAX, max(0, get_int_param(self.params, "BydRadarGapGate", 0)))
 
   def update_params(self) -> None:
     if self.param_read_counter % 50 == 0:
@@ -94,6 +115,12 @@ class DesireHelper:
     v_ego = carstate.vEgo
     one_blinker = carstate.leftBlinker != carstate.rightBlinker
     below_lane_change_speed = v_ego < self.lane_change_assist_speed_ms
+
+    # T8: BYD's RadarInterface path only - every other brand leaves both fields
+    # false, and the gate defaults 0, so today this is inert by two layers.
+    gap_closing = self.radar_gap_gate >= 1 and getattr(carstate, "radarGapClosing", False)
+    gap_new = (self.radar_gap_gate >= 2 and getattr(carstate, "radarGapNew", False) and
+               getattr(carstate, "radarGapClosing", False))
 
     # Lane turn controller update
     self.lane_turn_controller.update_lane_turn(blindspot_left=carstate.leftBlindspot, blindspot_right=carstate.rightBlindspot,
@@ -126,9 +153,10 @@ class DesireHelper:
         self.alc.update_lane_change(blindspot_detected, carstate.brakePressed)
 
         # rear-traffic clear window (LANE_CHANGE_CLEAR_TIME_MIN): a same-side
-        # blindspot hit at any point reopens it, so starting only ever happens
-        # behind a continuous run of clear BSD frames
-        if blindspot_detected:
+        # blindspot hit (or, T8 level>=1, a forward-gap boundary-cross) at any
+        # point reopens it, so starting only ever happens behind a continuous
+        # run of clear BSD frames and a stable radar gap
+        if blindspot_detected or gap_closing:
           self.lane_change_clear_time = 0.0
         else:
           self.lane_change_clear_time += DT_MDL
@@ -137,7 +165,8 @@ class DesireHelper:
           self.lane_change_state = LaneChangeState.off
           self.lane_change_direction = LaneChangeDirection.none
         elif (torque_applied or self.alc.auto_lane_change_allowed) and \
-                self.lane_change_clear_time >= LANE_CHANGE_CLEAR_TIME_MIN - 1e-6:  # float-sum tolerance
+                self.lane_change_clear_time >= LANE_CHANGE_CLEAR_TIME_MIN - 1e-6 and \
+                not gap_closing:  # float-sum tolerance; T8: never start mid-alert
           self.lane_change_state = LaneChangeState.laneChangeStarting
           self.lane_change_clear_time = 0.0
 
@@ -150,9 +179,12 @@ class DesireHelper:
         # clear window reopens so the change only restarts once the car has
         # passed. laneChangeFinishing is NOT aborted - swinging back across the
         # line this late is worse than completing the maneuver.
+        # T8 level 2 adds the new-target case only (see RADAR_GAP_LEVEL_MAX:
+        # an already-visible closing lead ahead is lane-ambiguous without yRel
+        # and aborting toward it is the worse guess).
         blindspot_now = ((carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or
                          (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
-        if blindspot_now:
+        if blindspot_now or gap_new:
           self.lane_change_state = LaneChangeState.preLaneChange
           self.lane_change_clear_time = 0.0
         else:
