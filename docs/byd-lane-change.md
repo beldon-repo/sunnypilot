@@ -246,7 +246,7 @@ class AssistLessLaneChange:
    - 测试 `selfdrive/car/tests/test_byd_radar_interface.py` 6 例（真 CANParser 位序回归+惰性+清槽）；host 回归 **81/81**（75 基线+6）。rlog 回放段 113：3620 返回帧，lead→单点 100% 一致、0 错值、0 无中生有。
 6. 待办：
    - [ ] 8.5.4 **路测标定档位→米**：人工测 1-4 档实际车间距（GPS/雷达实测对照），定稿 `RADAR_HUD_BARS_TO_M`；标定后翻转 `interface.py` 的 radarUnavailable 即点亮（无其他改动）。
-   - [ ] 8.5.5 后方方向不变：可及总线无 SRR 目标流（曾疑 0x2e0-2e8 块，复核为跨总线统计串入，bus1 无此地址）；要么 0x418 档位语义细化，要么设备探针（`radar_bus_probe.py` 补 bus3 与后方 SRR 两问）后评估引线代价。
+   - [ ] 8.5.5 后方方向不变：可及总线无 SRR 目标流（曾疑 0x2e0-2e8 块，复核为跨总线统计串入，bus1 无此地址）；要么 0x418 档位语义细化，要么设备探针（`radar_bus_probe.py` 补 bus3 与后方 SRR 两问）后评估引线代价。**10-18 勘误（`docs/byd-radar-rear-bus3-2026-10-18.md`）：两问日志侧已定案——①415 段全局 src 集合={0,1,2,128,130,192}，无 bus3 流量（128/130/192=panda LOOPBACK/REJECTED 回声，厂商 CanBus 枚举同证）；②0x418 实测 20Hz（非本文多处"10Hz"，0.5s clear 窗设计数字不受影响反而更充裕），b6/b7=低位恒 0xF 滚动计数器、798 次 L/R onset 无任何字节响应=纯结果位；车侧为 MPC 视频方案（两侧加塞=MPC 融合、前 MRR 走 MPC 私有 CAN 物理隔离），后方目标流在公开 CAN 不存在，T8 后方升级放弃等总线、维持 BSD 位+0x109 前向路。**
 
 ### 8.5.6 社区 mypilot 资产 + 槽位双路接口落码（2026-10-11 拍板 A+B）
 
