@@ -3,13 +3,14 @@
 > 汇总 2026-09-29/30 对三方实现的代码考古与官方维修手册消化的全部可吸收项。
 > 配套阅读：EPS 协议层规则见 `byd-eps-reference.md`，当前状态见 `byd-current-status.md`。
 > 本文是"候选经验库"：**每项标注吸收状态与触发条件**，动控制行为前先看 §5 决策树与纪律。
-> 最后更新：2026-10-04（新增 §3.4 MM-X sunnypilot-pc 对照）。
+> 最后更新：2026-10-14（新增 §2.6 op_full 10-08 构建对照）。
 
 ## 一、资料源清单
 
 | 源 | 路径 | 状态 |
 |---|---|---|
 | 厂商 op_byd 解密代码（PyArmor 运行时产物，100% 覆盖） | `/Users/wujiafu/Documents/op/cp_byd/docs/pyarmor_decrypted/opendbc_repo/opendbc/car/byd/`（`*.functions.py` 按代码对象可读；`*.values.txt` 常量全可读） | 已消化 §2 |
+| 厂商 op_full 10-08 构建（PyArmor **BCC 模式**，opendbc 车型层 8 文件） | `docs_site/pyarmor_decrypted_opfull_2026-10-08/`（解密 2026-10-13，源=设备 /data/op_full；函数体字节码不可得但壳 co_consts/co_names 全真，可与 9-29 旧版逐函数对照） | 已消化 §2.6 |
 | yysnet 社区 port | `/Users/wujiafu/Documents/op/opendbc/opendbc/car/byd/` | 已消化 §3 |
 | mouxangithub port | `/Users/wujiafu/Documents/op/mouxangithub/opendbc/opendbc/car/byd/` | 已消化 §3.3 |
 | 官方维修手册（2021 款宋 PLUS DMi）ACC + MPC 分册 | `docs_site/pdf/2021年款比亚迪宋PLUS DMi-01-维修手册-*.txt`（OCR，正文可读） | 已消化 §4 |
@@ -56,6 +57,34 @@ cruiseState.enabled 压 ~15s 再放行**——边沿迟到但真，通用事件�
 avail=1 → 17.54s latch=1（真边沿）→ 17.55s OP enabled 同帧。**已照搬**：我们
 `byd/carstate.py` `BOOT_LATCH_HOLD_TIME=15`。反例教训：同一症状在 car_specific 层合成
 pcmEnable（已撤）也能修，但层不对——**先问"厂商在哪层管这件事"再动手**。
+
+### 2.6 厂商 10-08 op_full 构建（PyArmor BCC 模式，2026-10-13 解密，产物 `docs_site/pyarmor_decrypted_opfull_2026-10-08/`）
+
+社区构建升级到了 PyArmor **BCC 模式**（函数体=原生码，字节码手段拿不到），但壳的
+`co_consts/co_names/co_varnames` 元数据全真——与 9-29 旧版（全字节码）逐函数对照即可判断逻辑是否变化。
+本轮所有项均**只登记**（纪律：v2 后不动控制行为）。
+
+**参数级变化（社区两个月实测调参，最高价值）**：
+
+| 项 | 9-29 | 10-08 | 判读 | 吸收状态 |
+|---|---|---|---|---|
+| `STEER_DRIVER_ALLOWANCE` | 120 | **80** | 让位阈值收紧 33%——对司机力矩更早让位 | **候选杠杆**：若对向硬顶/对抗场景再现，与守卫 A（离散域）正交的连续域阈值，param 化 A/B |
+| `ACCEL_MIN/BP/VALS` | -4.0 | **-3.5** | 纵向刹车上限放松 0.5 m/s² | Phase2 纵向首测后对照（我们 ACC_CMD 下限现沿用 -4.0，厂商新构建更保守） |
+| `ANGLE_ERROR_ALLOWED/MAX`、`ANGLE_RATE_LIMIT_*` | 5/5、bp[5,10,15] | 8/12、bp[5,15,30]→v[0.5,0.8,1.2] | 角度路径转率收紧 | 宋无 0x482 不涉及，仅备案 |
+
+**新开关/结构（用途未证，探针候选）**：
+- `BYDSnG`（Params 字符串，`CarController.__init__` 读取）——**首个疑似宋专属开关**（SnG 疑为宋某年款/版本代号），体 BCC 未知 → 设备行为探针：置值后 diff 输出帧
+- `STEERING_TORQUE_LIMIT_SPEED=20` + `STEERING_INNER_EPS_SCALE_POINT=30`（CarControllerParams 新增速度膝点/内圈缩放点）——20 膝点 ELF 已有，30 为新 → 关联根因 17 低速对抗
+- `steer_unbalance_coef`（BYDToggles 新 float，CarInterface.update 层用）——左右扭矩不平衡补偿 → 本车未观察过该现象，备案
+- `BYDReverseAccCAN`/`BYDReverseBsmCAN`（flag 2/4096）——ACC/BSM 报文路由反转开关 → BSD 0x418 若异常的排查方向
+- `ALT_HANDSOFF_CARS` 仍=海豹三车——宋依旧不在 hands-off 清零列表（§2.4 判断第三次确认）
+- `BYDEnableRadarMeas`——唐专用实测雷达放行；宋雷达定论不变（radarUnavailable 全 fleet 默认 True + 宋空 parser，10-11 复扫定案第三次独立印证）
+- `BYD_LM_PARAMS`（Han 专属，旧版已有）——不涉及
+
+**纵向参考实现（Phase2 M2 速率 governor 拍板时对照）**：
+- 新增 `get_accel_and_jerk_from_plan(CP, CS, speeds, accels, jerks)`（壳元数据：`CONTROL_N`/`DT_MDL`/`CONTROL_N_T_IDX` + `longitudinalActuatorDelayLowerBound/UpperBound` + interp vEgo/aEgo，`ALLOW_DP` 切 delay 界）——carcontroller 层直接采样纵向 plan 取 (accel, jerk)，jerk 来自 plan 本身而非 PID 输出限幅；与 LongControl-PID 路线二选一时可对照。`CarController.update` 已引用。
+
+**工具链资产（已落）**：补丁版 pycdc（3.12 十个 opcode，161 行 diff）持久化 `~/Documents/op/pycdc/`；"BCC 壳元数据 vs 旧版全字节码"对照法入库；解密复现流程见产物 README。
 
 ## 三、社区 port 的发现
 
