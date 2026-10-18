@@ -1,4 +1,4 @@
-> **状态(2026-10-18,当日五次更新:挖掘→复验→跟停收口→夜间全帧续探④→T8 落码⑤(BydRadarGapGate 默认 0,行为仍零变更)→后向/bus3 定案⑥(docs/byd-radar-rear-bus3-2026-10-18.md))**:逆向定案草案;六帧已入库 byd_general_pt.dbc(**HYPOTHESIS 标注、无任何在车 CANParser 实例化**);b0 CRC 已破(SAE J1850);单位候选收口为 **feet 0.3048 vs 0.25 二选一**(1.0/0.5/0.45 均被 13 起跟停事件的硬上界 u≤0.42-0.44 排除),路测实测驻停距定夺,控制行为零变更(路测门禁不变)。数据=docs_site/hour_logs(2026-09-28 控车 4 段全量 rlog)+ docs_site/byd_logs_2026-10-05_07(415 段)+ 当日 415 段全量复跑(见「定案补录」)。工具=tools/byd/{radar_re_mine.py(MI 挖掘),radar_0109_validate.py(416 段跨段检验,/tmp/radar_0109_1005.json),radar_415_diversity.py(415 段多样性/回声终检,/tmp/radar_415_diversity.{txt,json}),radar_sup_mine.py(can2 监督拟合),radar_echo_probe/radar_echo_checks.py(回声审查),radar_unit_check*.py(单位审查),radar_unit_pin.py+radar_unit_aggregate.py(486 段静止逼近/翻转回归/CRC 试打,/tmp/up_*.json),radar_stop2lead.py(13 起跟停等式标定,/tmp/radar_stop2lead.json),radar_seg_extract.py(全帧缓存 8B×六帧→/tmp/seg1005.pkl,配套 radar_seglib.py),radar_247_census.py(/tmp/radar_247.txt),radar_tau_fit.py(/tmp/radar_tau.txt),radar_b6_model.py(/tmp/radar_b6.txt/.json),radar_t8_lead.py(/tmp/radar_t8.txt),radar_presence_fresh.py(/tmp/radar_pf.txt),radar_t8_replay.py(T8 落码验收回放,/tmp/radar_t8_replay.txt);实现=opendbc/car/byd/radar_gap.py+carstate/interface 接线+desire_helper 门控+test_byd_radar_gap.py}。本文推翻 docs/byd-lane-change.md §8.5.7 中「0x101-0x10A=状态广播」对 0x109 b7 的判定,其余维持。
+> **状态(2026-10-18,当日七次更新:挖掘→复验→跟停收口→夜间全帧续探④→T8 落码⑤(BydRadarGapGate 默认 0,行为仍零变更)→后向/bus3 定案⑥(docs/byd-radar-rear-bus3-2026-10-18.md)→b3 非横向判定⑦)**:逆向定案草案;六帧已入库 byd_general_pt.dbc(**HYPOTHESIS 标注、无任何在车 CANParser 实例化**);b0 CRC 已破(SAE J1850);单位候选收口为 **feet 0.3048 vs 0.25 二选一**(1.0/0.5/0.45 均被 13 起跟停事件的硬上界 u≤0.42-0.44 排除),路测实测驻停距定夺,控制行为零变更(路测门禁不变)。数据=docs_site/hour_logs(2026-09-28 控车 4 段全量 rlog)+ docs_site/byd_logs_2026-10-05_07(415 段)+ 当日 415 段全量复跑(见「定案补录」)。工具=tools/byd/{radar_re_mine.py(MI 挖掘),radar_0109_validate.py(416 段跨段检验,/tmp/radar_0109_1005.json),radar_415_diversity.py(415 段多样性/回声终检,/tmp/radar_415_diversity.{txt,json}),radar_sup_mine.py(can2 监督拟合),radar_echo_probe/radar_echo_checks.py(回声审查),radar_unit_check*.py(单位审查),radar_unit_pin.py+radar_unit_aggregate.py(486 段静止逼近/翻转回归/CRC 试打,/tmp/up_*.json),radar_stop2lead.py(13 起跟停等式标定,/tmp/radar_stop2lead.json),radar_seg_extract.py(全帧缓存 8B×六帧→/tmp/seg1005.pkl,配套 radar_seglib.py),radar_247_census.py(/tmp/radar_247.txt),radar_tau_fit.py(/tmp/radar_tau.txt),radar_b6_model.py(/tmp/radar_b6.txt/.json),radar_t8_lead.py(/tmp/radar_t8.txt),radar_presence_fresh.py(/tmp/radar_pf.txt),radar_t8_replay.py(T8 落码验收回放,/tmp/radar_t8_replay.txt),radar_b3_mine.py(/tmp/radar_b3.txt),radar_b3_lat.py(二阶横向回归,/tmp/radar_b3_lat.json);实现=opendbc/car/byd/radar_gap.py+carstate/interface 接线+desire_helper 门控+test_byd_radar_gap.py}。本文推翻 docs/byd-lane-change.md §8.5.7 中「0x101-0x10A=状态广播」对 0x109 b7 的判定,其余维持。
 
 # BYD 宋 bus1 0x10x 雷达字段逆向定案草案
 
@@ -78,6 +78,12 @@
 - **测试**:selfdrive/car/tests/test_byd_radar_gap.py **18 例**(穿越/去抖/迟滞/低噪摆动不误报/存在位/247 带/新目标时效/CarState 真解码/gate0 行为逐字节不变+gate1 阻止发起+gate2 新目标 abort/旧目标不退);host runner 全套 **105/105**、byd dbc/carstate 套件 **38/38**;radar_interface 主源、values.py、控制路径未动。
 - **待办**:路测先开 gate=1 观察阻塞体验与告警时机(对照 b7/驻停距实测量一并钉单位)→ 视情 gate=2;后方数据源缺口与 T7 设备探针不在本门控覆盖内。
 
+## ⑦ b3 yRel 探测收口(2026-10-19 凌晨,tools/byd/radar_b3_mine.py + radar_b3_lat.py;⑥=后向/bus3 定案见 docs/byd-radar-rear-bus3-2026-10-18.md)
+
+- **一阶(415 段)**:b3 在 lead 态确实离开 0x7F(class2/3/4 非 127 占 75-90%,|off| med 1-2/p90 4-15/max 60+,class0 96.5% 恒 127=无效值模式);lag-1 几乎不动(med|db3|=0);出现事件 t+0 散布 ±6、1s 内收敛 ±3;13 起驻停平台 b3 med=128。**形态全部与「某慢变有符号量、中心 127」一致**。
+- **二阶判决(横向回归)**:自 steeringAngleDeg(ratio 19.5/轴距 2.765)双积出横向位移,取目标连续可见窗口跑 b3~Δy 回归:123 事件 slope med=**0.0 LSB/m**、r2 med=**0.04**、r2>0.5 仅 3/121 且斜率 -1.4/+0.2/-0.1 符号互斥;其中 121 个漂移窗 |dy| 中位 **12.7m**——若是车道级 yRel,任何合理比例(0.1~0.5m/LSB)都必须产生 ±35~120 LSB 扫掠,**未发生**;仅有的 2 个真变道事件(blink=1、|dy|2.9/4.1m)db3=+4/+3 且符号不随位移方向翻转。
+- **判定:b3 非横向距离,不可作分道输入**;候选语义收窄为相对航向角/慢偏置类(路测无关)。连带结论:**T8 level-2 的「新目标才退」语义即终态**——可及总线上不存在分道量(0x35x track 路 0 填充、0x101 表状量化、b3 非横向,⑥ 又排除后向总线),真分道两条路:MPC 私有 CAN 引线,或 **⑥ 新发现的 67ms J1850 多目标槽表**(0x380s/0x340s/0x3C8s,前向强相关 r=0.78-0.87,若含多目标则自带分道能力——登记为下一轮逆向,见 docs/byd-radar-rear-bus3-2026-10-18.md)。
+
 ## 证据链(416 段报告 + 三方审查)
 - **档位单调分离**:113/415 段含全三档(≥50 帧),0x109 b7 跨段 mean(c4)>mean(c3)>mean(c2) 严格占 90.3%(102/113);类均值 c0/c2/c3/c4 = 1.35/31.2/49.7/112.9。同项 0x101 b7 仅 24.8%、c0 均值 30.6 非零——0x101 b7 不是该距离字段。
 - **无目标归零**:0x109 b7 class-0 零率 96.3%(279985/290824),f8_8/f9_12 整段恒 0(uniq=1)——时间滚动计数器不可能;残留 3.7%(10839 帧,max 247)为捕获/丢失瞬态。
@@ -92,7 +98,7 @@
 |---|---|---|---|
 | 0x109 b7 | LongDist_109:连续前向距离,×0.3048m(未钉,④b τ 阶梯旁证),0=无目标;**247=丢失边缘瞬态码非持续钉死,连续上限 246**(④a) | 高 | 单调 90.3%、零率 96.3%、领先档位翻转 309/309(④e)、r²=0.69 |
 | 0x109 b6 | **纯二值 {0x7F,0xFF},仅 bit7=Valid/捕获标志,不含距离**(④c,粗细分解证伪) | 中高 | 10-05_07 全库 676035 帧无第三值;lead 窗 0xFF 占 49.8% vs class-0 1.9% |
-| 0x109 b3 | 0x7F 心缓变有符号量(候选 yRel/偏置) | UNKNOWN | 与 steerAngle/vEgo/b7 相关全 \|r\|<0.11 |
+| 0x109 b3 | 慢变有符号量(中心 127=无效值),**非横向距离**(⑦:123 个横移窗 slope med 0.0 LSB/m、r2 med 0.04;真变道 db3 符号不随方向翻转);候选=相对航向角/慢偏置 | 判定高/语义低 | lead 态 75-90% 离 127、lag-1 恒 0、驻停 med 128;|r(b3,b7)| med 0.218(推翻早先 <0.11)但与 Δy 零相关 |
 | 0x101/0x105 b7 | 表状量化第二槽:远距钉 0xD8=216、近带簇 29-34、非钉值 corr≈0.60、时距假说证伪(④d),不可作 0x109 回退/校验 | 低 | 24.8% 单调、class-0 均值 30.6 非零、corr(b7/vEgo)=-0.318、比值中位 1.67 漂移 |
 | 0x10A b3[7:5] | Presence:111=前向可见目标 | 高 | lead 96.5-97.5% vs no-lead 0.0-2%(全 384 位唯一) |
 | 0x101≡0x105 | 全 8 字节含 b0 校验 99.7-100% 相等 = 传输重发 | 高 | 不得当 0x109 字段冗余用(审1②/审3c) |
@@ -116,7 +122,7 @@
 1. **部分销账(②-补收窄至二选一,④b 增 feet 旁证)**——1.0 与 0.45/0.5 **均已排除**(13 起跟停事件逐窗硬上界 u≤0.42-0.44);④b τ 阶梯:档位边界 b7/vEgo×u={0.89,1.46,2.01}s@feet ≈ 工业标准 ~{1.0,1.5,2.0}s,0.25 下 {0.73,1.20,1.65}s 不成套(**形状 u-不变,仅旁证非定夺**);路测实测跟停驻停距定夺(15c 平台→4.6m≈feet / 3.7m≈0.25);dbc 以 0.3048+HYPOTHESIS CM_ 入库,路测标定前禁止控制读取。
 2. **已销账(④a+④f)**——0=无目标已证;**247 翻案=丢失边缘瞬态码非持续钉死**(48/742451 帧、10 episode 全 ≤0.5s、集中在 246↔0 边缘,连续上限按 246 处理);c0 残差与「存在位卡死 4 段」一并翻案:**11/11 ghost 窗 b7>0**(CRC/帧率无恙),--234=vEgo 恒 0 + b7=15 驻停平台(静止前车真实可见),卡的是 HUD HasLead 非雷达;过滤规则=**presence==7 AND b7>0**,「自车在动+b7 冻结」危险形态全库 0 例、留路测观察。
 3. **已销账**——多样性/回声证据从 2 段升至 415 段全量(①:distinct 240、单调 90.3% 于 113 合格段、hold 变化率跟车 9.99% vs 无跟车 0.0000%),解析 0 致命错误。
-4. 无 vRel,b6/b3 已排除——track 原语义无法覆盖。
+4. 无 vRel;b6 纯二值(④c)、b3 非横向(⑦)——track 原语义与分道输入在可及总线均无;分道改押 ⑥ 的 67ms 槽表或多目标。
 5. **销账(2026-10-18 重跑)**——b0 CRC **已破**:SAE J1850 CRC-8(poly 0x1D/init 0xFF/无反射/xorout 0xFF,载荷 b1..b7),hour_logs 2933 唯一载荷 100% + 独立日 hour_logs_2 80100/80100;byd_checksum 族确不可复用(不同算法),dbc CM_ 已命名。首轮 agent 试打未中系参数集不全(缺 xorout 0xFF 变体),作废。
 6. **开口(④d 已具体化)**——0x101 跟踪策略与 0x109 不同,不可作回退/校验源(dbc 注释同口径);形态已明:表状量化、远距钉 0xD8=216、近带簇 29-34、时距假说证伪(corr -0.318)、非钉值 corr≈0.60——第二槽语义(预测目标/旁车?)仍待建模。
 7. AccState 门控未细化(ACC_ACTIVE 子集或再移标定)。
