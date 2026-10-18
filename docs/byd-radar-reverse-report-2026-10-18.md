@@ -1,7 +1,7 @@
 # BYD 宋 bus1 雷达逆向 — 整体报告（2026-10-18）
 
 > 一句话：**宋的 bus1 确实有雷达原始数据**——0x101-0x10A 是 Continental ARS410 家族的目标帧，
-> 其中 0x109 b7 是领先 HUD 档位的连续前向距离（feet 量级、米制已排除）、0x10A b3[7:5] 是目标存在位、
+> 其中 0x109 b7 是领先 HUD 档位的连续前向距离（候选缩至 feet 0.3048 vs 0.25，1.0/0.5/0.45 已被 13 起跟停事件硬上界排除）、0x10A b3[7:5] 是目标存在位、
 > b0 已破译为 SAE J1850 CRC-8；但**没有相对速度场**，完整 track 语义仍不可覆盖。
 > 六帧已入 dbc（HYPOTHESIS，无任何在车实例化），控制行为零变更。
 > 细节定案见 `docs/byd-radar-010x.md`，本报告为全程汇总。
@@ -22,6 +22,7 @@
 | ③ 对抗审查 | 三路独立证伪:时间假象/HUD 回声/单位自洽 | radar_echo_probe/checks.py, radar_unit_check*.py | 计数器说死、回声说死(8/10 翻转 b7 先行)、米制被疑 |
 | ④ 监督反解 | can2 为标(档位/时距带+vEgo),单/双字节×LE/BE×符号全变体回归 | radar_sup_mine.py | 0x109 b7 唯一跨段稳定;无 vRel;b0 确定性函数;b6/b7 平行 |
 | ⑤ 钉定收口 | 静止逼近硬上界+翻转回归+CRC 试打,486 段全量+独立日 | radar_unit_pin.py + radar_unit_aggregate.py + radar_415_diversity.py | u≤0.467(米制否)、CRC 破(100%×2 组)、多样性终检成立 |
+| ⑥ 跟停等式 | 13 起 ACC 跟停事件(standstill+驻停平台+存在位),逐窗 u≤D/Δb7(前车不可倒车) | radar_stop2lead.py (/tmp/radar_stop2lead.json) | **u≤0.42-0.44 → 0.5/0.45 判死,候选缩至 feet vs 0.25** |
 
 方法论教训两条：**单调性检验必须跨段**（同段内新鲜度/时间共线都会造出伪相关）；
 **单位标定必须有物理恒等式锚**（前车静止时 `−d(dist)/dt = vEgo`），日志内即可完成，不必等路测。
@@ -30,7 +31,7 @@
 
 | 字段 | 定案 | 置信 | 关键证据 |
 |---|---|---|---|
-| 0x109 b7 | **连续前向目标距离**，u∈[0.25,0.467] m/计数，feet(0.3048) 最优候选；0=无目标哨兵，247 疑超量程 | 量高/值未钉 | 单调 90.3%×2 组归档、distinct 240、领先 HUD 翻转、硬上界 0.467、feet 下 τ=0.87/1.24s+偏移 3.7m 合理 |
+| 0x109 b7 | **连续前向目标距离**，u∈[0.25,0.44] m/计数，**候选缩至 feet(0.3048) vs 0.25 二选一**；0=无目标哨兵，247 疑超量程 | 量高/值未钉 | 单调 90.3%×2 组归档、distinct 240、领先 HUD 翻转、**13 起跟停事件硬上界 u≤0.42-0.44**、驻停平台 15c→feet 4.6m/0.25 3.7m、feet 下 τ=0.87/1.24s 更自然 |
 | 0x10A b3[7:5] | **目标存在位**：111=前向可见目标 | 高 | 全 384 位唯一干净分离：lead 96.5% vs no-lead 0.0% |
 | 全 6 帧 b0 | **CheckSum = SAE J1850 CRC-8**（poly 0x1D/init 0xFF/无反射/xorout 0xFF，载荷 b1..b7） | 确凿 | 2933 唯一载荷 100% + 独立日 5 帧型 80100/80100 |
 | 全 6 帧 b1 | AliveCounter 滚动计数（低 nibble 每帧 +1） | 高 | 跨帧恒 +1 规律 |
@@ -63,7 +64,7 @@
 
 | # | 风险 | 状态 |
 |---|---|---|
-| 1 | 单位 0.3048 vs 0.25 未绝对钉 | **开口**——一次跟停路测分辨（41 计数=12.5m vs 10.3m）；米制 1.0 已排除 |
+| 1 | 单位 0.3048 vs 0.25 未绝对钉 | **开口**——13 起跟停事件把上界收到 u≤0.42-0.44（1.0/0.5/0.45 全排除），剩二选一；路测实测一次跟停驻停距分辨（驻停 15c：feet≈4.6m / 0.25≈3.7m） |
 | 2 | 0/247 哨兵语义 | 部分销——0=无目标已证（无跟车段整段恒零）；247 超量程未证 |
 | 3 | 多样性证据薄 | **销**——415 段+hour_logs_2 独立日复验完成 |
 | 4 | 无 vRel | **维持**——track 原语义不可覆盖，档 3 路（差分 vRel）噪声大仅备选 |
@@ -73,7 +74,7 @@
 
 ## 7. 下一步
 
-1. **跟停标定**（唯一硬开口）：下次路测录一段 ACC 跟停至静止事件，钉 0.3048 vs 0.25；顺带观察 247。
+1. **跟停标定**（唯一硬开口）：10-05 归档的 13 起跟停已把候选缩到 **feet 0.3048 vs 0.25**；下次路测实测一次跟停驻停距即可定夺（15c 平台→4.6m=feet / 3.7m=0.25），顺带观察 247 超量程码。
 2. **T8 落地**：BSD 发起前 clear 窗/starting abort 可升级用 0x109 连续量——**只做单调序与相对阈值**（比例于档位穿越提前量），米制阈值等①钉死后引入；过滤用存在位+档位双条件。
 3. **设备探针**（T7 残余）：bus3/后方 SRR 是否可及仍待 `radar_bus_probe.py` 上机。
 4. 0x101/0x105 的"另一路 b7"与 0x109 b6/b7 平行递减（段偏置 -6/-12）继续建模（粗细分解 or 双目标）。
@@ -88,6 +89,7 @@
 .venv/bin/python tools/byd/radar_sup_mine.py extract && .venv/bin/python tools/byd/radar_sup_mine.py fit
 .venv/bin/python tools/byd/radar_unit_pin.py docs_site/hour_logs_2 --pattern 'rlogs_flat/*.zst' --json /tmp/up_hl2.json
 .venv/bin/python tools/byd/radar_unit_aggregate.py /tmp/up_hl2.json /tmp/up_hl.json /tmp/up_1005.json
+.venv/bin/python tools/byd/radar_stop2lead.py docs_site/byd_logs_2026-10-05_07/realdata --workers 10   # 13 起跟停,候选缩至 feet vs 0.25
 # 测试
 .venv/bin/python -m pytest selfdrive/car/tests/test_byd_radar_010x_dbc.py selfdrive/car/tests/test_byd_radar_interface.py selfdrive/car/tests/test_byd_carstate.py -q --noconftest -o addopts=
 ```
