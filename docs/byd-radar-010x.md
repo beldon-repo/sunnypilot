@@ -99,6 +99,14 @@
 - **连带发现并修复 carstate 一致性 bug**:`update_radar_gap` 原先 `LongDist_109 / 0.3048` 还原计数——factor 改 0.25 后会得 0.82× 错位计数(gap 测试在 mac 因 params_pyx 无法运行而漏网);修复=b7 改走 dbc 新增的 **factor-1 `MSG_109_B7` raw 孪生信号**(与 B5/B6 占位同风格、与 LongDist_109 同位并存),计数路径与任何 scale 永久解耦——u 只影响米制侧(LongDist_109 解码值/未来 track 合成/距离显示),**RadarGapMonitor 的 r=b7/vEgo counts 空间对 u 的任何调整零响应**。
 - 测试:010x dbc 套件 11/11(mac,新增 raw twin scale-free 断言);gap 套件新增 `test_b7_counts_scale_free`(mac 环境跑不了 params_pyx 链,设备/host-runner 侧执行);mac 冒烟:MSG_109_B7=15 精确、LongDist_109=3.75、端到端 closing 序列触发 ✓。
 
+## ⑩ alpha 纵向验证回合:雷达合成 lead 上线(2026-10-19,radar_interface LIVE)
+
+- **`CP.radarUnavailable = False`**(interface.py,首次):radarState 首次有 BYD 合成 lead。stock ACC 模式下 radarState 不进任何纵向路径(厂商 MPC 独占),flag 翻转在该模式行为中性;**AlphaLongitudinalEnabled 时合成 lead 直接进纵向 MPC**——本回合路测目标。
+- **合成优先级链**(radar_interface.py):slot 路(0x351-354,私有 CAN 引线后自动点亮)→ **b7 连续 lead(0x109 presence==7 门控 + dRel=b7×u + med 差分 vRel)** → HUD 档位(纯位置 fallback,vRel=NaN,radard vel_sane 永不选中——有意设计)。b7 主源语义:④a/④f 门控(0<b7≤245、presence==7)、无效帧清空差分历史(vRel 永不跨目标丢失边缘)、0.4s med 窗(radar_dvrel_quality:稳态≈0/延迟 0.24s/跟停 r=0.56-0.90)。
+- **u 注入**:card.py 构造 RI 后读 `BydRadarDistScale`(clamp 0.1-0.5)注入 `RadarInterface.radar_dist_scale`——opendbc 保持 params-free;`RADAR_HUD_BARS_TO_M` 注释改判:**档位=时距带**(τ {0.71,1.02,1.4}s@u=0.25),静态米映射仅末位 fallback。
+- **测试**:test_byd_radar_interface 扩至 **18/18**(mac 实跑):b7 压 HUD 档位/稳态 vRel≈0/closing vRel 负且有限(NaN 会让 radard vel_sane 失配——HUD fallback 永不可选的原因)/presence+247 门控五连/gap 历史重置/inert 断言;旧 HUD/slot 套件全保持。
+- **路测验证清单**:①stock ACC 模式先跑——swaglog/connect 看 radarState.leadOne.dRel 与真实车距对照(顺带钉 u);②再开 AlphaLongitudinalEnabled——纵向 MPC 吃合成 lead 的跟车/停止表现,重点观察 lead 瞬变(加减速)时 vRel 0.24s 延迟的影响;③BydRadarGapGate 可同时 1/2 观察变道门控。
+
 ## 证据链(416 段报告 + 三方审查)
 - **档位单调分离**:113/415 段含全三档(≥50 帧),0x109 b7 跨段 mean(c4)>mean(c3)>mean(c2) 严格占 90.3%(102/113);类均值 c0/c2/c3/c4 = 1.35/31.2/49.7/112.9。同项 0x101 b7 仅 24.8%、c0 均值 30.6 非零——0x101 b7 不是该距离字段。
 - **无目标归零**:0x109 b7 class-0 零率 96.3%(279985/290824),f8_8/f9_12 整段恒 0(uniq=1)——时间滚动计数器不可能;残留 3.7%(10839 帧,max 247)为捕获/丢失瞬态。

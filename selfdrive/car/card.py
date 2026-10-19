@@ -21,6 +21,7 @@ from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
 from openpilot.selfdrive.car.car_specific import MockCarState
 from openpilot.selfdrive.car.helpers import convert_carControlSP, convert_to_capnp
+from openpilot.sunnypilot.common.raw_params import get_float_param
 
 from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_car_specific_params
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
@@ -122,6 +123,12 @@ class Car:
                         fixed_fingerprint, init_params_list_sp)
       sunnypilot_interfaces.setup_interfaces(self.CI, self.params)
       self.RI = interfaces[self.CI.CP.carFingerprint].RadarInterface(self.CI.CP, self.CI.CP_SP)
+      # BYD synthesized-lead scale (docs/byd-radar-010x.md ⑨): u is pinned 0.25
+      # and tunable on the Developer panel; injected here because opendbc stays
+      # params-free. Other platforms' RadarInterface simply lacks the attribute.
+      if hasattr(self.RI, "radar_dist_scale"):
+        u = get_float_param(self.params, "BydRadarDistScale", self.RI.radar_dist_scale)
+        self.RI.radar_dist_scale = min(0.5, max(0.1, u))
       self.CP = self.CI.CP
       self.CP_SP = self.CI.CP_SP
 

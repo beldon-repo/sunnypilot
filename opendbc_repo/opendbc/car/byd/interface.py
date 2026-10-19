@@ -34,15 +34,17 @@ class CarInterface(CarInterfaceBase):
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
     ret.steerLimitTimer = 0.5
 
-    # No valid MRR target exists on any recorded bus (docs/byd-lane-change.md
-    # §8.5): 0x374 absent, 0x380-0x38f is a status table, and the 0x351-354
-    # track slots on bus 1 are present but logged IsValid=0 only. RadarInterface
-    # parses those slots (community tangdm layout) and falls back to the 0x32D
-    # HUD bar synthesis; the slot path auto-lights if a real target stream ever
-    # appears (private-CAN tap / AEB duty). It stays inert until
-    # RADAR_HUD_BARS_TO_M is calibrated on-road; flipping this flag is then the
-    # only change needed. Behavior today is unchanged.
-    ret.radarUnavailable = True
+    # Radar interface LIVE (2026-10-19, alpha-longitudinal verification round):
+    # primary synthesized lead = continuous 0x109 b7 * BydRadarDistScale (pinned
+    # 0.25 m/count) with the presence==7 gate and median-filtered vRel;
+    # 0x351-354 slot path stays as the auto-lighting future source (private-CAN
+    # tap), 0x32D HUD bars as the last-resort fallback. In stock-ACC mode
+    # radarState feeds nothing longitudinal (vendors' MPC keeps owning the
+    # session), so this flag is behavior-neutral there; with
+    # AlphaLongitudinalEnabled the synthesized lead feeds the longitudinal MPC
+    # and this road test validates dRel/vRel quality end-to-end. The gap
+    # monitor (BydRadarGapGate) is unaffected (counts space, own parser).
+    ret.radarUnavailable = False
 
     # longitudinal control is done by the stock ACC; openpilot only does
     # lateral control plus spoofed resume button for auto-resume from standstill.
