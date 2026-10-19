@@ -71,6 +71,43 @@ done
 .venv/bin/python tools/byd/radar_hour_census.py extract docs_site/hour_logs/radar_rlogs /tmp/hour_bus1.pkl
 # 五通道监督挖掘(本文 §1 表,输出 §2/§3 全部数字)
 .venv/bin/python tools/byd/radar_hour_mine.py --top 20
+# §8 hour_logs_2 扩展轮(67 段,平铺 rlogs 软链同法;支持 workers)
+.venv/bin/python tools/byd/radar_hour_census.py extract docs_site/hour_logs_2/radar_rlogs 10 /tmp/hl2_bus1.pkl
+.venv/bin/python tools/byd/radar_hour_mine.py --cache /tmp/hl2_bus1.pkl --top 12
 ```
+
+## 8. hour_logs_2 扩展轮(2026-10-19 夜,67 段全量 672M 独立语料,面向「雷达支持纵向控制还缺啥」)
+
+> hour_logs_2(9-28 晚静默守卫验证会话,路由 0e-16,夜间驾驶+锁存重启场景)此前仅做过 10 段 5 帧单位复验;本轮首次全 bus1 挖掘(110 地址与 hour_logs 完全同集,同固件),回答纵向控制缺口清单。
+
+### 8.1 relV/vLead 判死第三次独立复验(维持)
+- lead 富集段 R15_001/002、R10_000、Rf_013、R13_001 等 5 通道全字段扫描:top 信号全部可定性——0x7fe7a00/b1 对 vEgo r=−0.83 为 panda 回声帧(非车总线,52ad 已判不追);0x344/b7 VREL 通道 r=+0.845 为跨窗趋势伪影(正号,期望 −1,单段);0x341/x12lo hf r=+0.606(3 段)为距离场的物理间接相关(vEgo 残差→closing 残差→距离残差);0x34a/b4 vEgo 全量 +0.764 但去趋势 −0.610 符号翻转=vLead 假说要求同号,排除。
+- **三语料(10-05/07 415 段、hour_logs 4 段、hour_logs_2 67 段)× 四类速度语义监督全灭,判死终局。**
+
+### 8.2 presence 枚举语义细化:非零即有效,但 7 才是「领先目标输出」
+- 全 67 段统计:pres∈{2,4,5,6,7} 共 4306 帧 b7 有效性(0<b7≤245)**100%**,pres=0 时 0.01%(108052 帧)——**「存在位非零 ⇒ 距离有效」跨语料定律**(hour_logs 有 pres=1 共 3 帧同律)。现行 pres==7 门控在挖掘层面漏掉 +46% 有效数据(2957→4306)。
+- 但 Rf_013 同段 HUD 同档内:pres=5/6 的 b7 均值 167/186 vs pres=7 的 103——**同时段系统性不同 ⇒ presence 是多目标选择器状态**(7=ACC 锁定领先目标的输出距离;5/6=其它可见/候选目标;迁移链 0→6→7、7→0、5↔6、4↔5 支持状态机/选择器两读,歧义未分)。
+- **控制语义维持 pres==7**(b7 在非 7 态可能属于别的目标,并入会引入非领先距离);登记项:RadarGapMonitor level2「新目标出现」可从「pres 0→7」提前为「pres 0→非零」沿(更早的新目标进入视野信号,窗口更灵敏,路测后决定)。
+- HUD-lead 而 pres=0 的窗(R15_004 457 帧、R15_001 287 帧等):HUD 平滑滞后/视频融合保持窗,与既有「雷达原始更敏感」定案同向。
+
+### 8.3 纵向控制缺口清单(本轮结论汇总)
+| 项 | 状态 | 来源 |
+|---|---|---|
+| dRel 距离 | ✓ 0x109 b7(25Hz)+块 C x12(15Hz 8×细分)+块 B(近程) | 三语料复验 |
+| 目标存在/有效性 | ✓ presence 非零 ⇒ b7 100% 有效;7=领先输出 | §8.2 本轮 |
+| standstill/驻停 | ✓ b7 平台+存在位(13 起跟停事件) | radar_stop2lead |
+| 目标丢失边缘 | ✓ 0=无目标、247 瞬态、246 连续上限 | ④a/④f |
+| vRel 原始多普勒 | ✗ 三语料×四类监督穷尽判死 | §8.1 本轮 |
+| vRel 派生 | ✓ b7+0.4s med:稳态噪声≈0、0.24s 延迟(门控/预警级够用,MPC 闭环边缘) | radar_dvrel_quality |
+| vLead/aLead | ✓ vLead=vEgo+派生 vRel;aLead 由 vLeadFilter 滤波导出(openpilot 惯例,无需原始字段) | — |
+| **u 单位钉死** | ✗ **唯一硬门禁**:feet 0.3048 vs 0.25 二选一,日志内穷尽(hl2 0 跟停事件),**一次路测跟停实测驻停距(≈4.6m/≈3.7m)即定夺** | 风险#1 |
+| 目标 ID/多目标 | 部分:槽表动态槽位无稳定 ID,ACC 领先 75% 在槽 1 可作启发式;presence 选择器语义歧义开口 | §8.2 |
+
+**一句话:纵向控制的数据侧已齐——距离/存在性/驻停/丢失全复验,vRel 可派生(门控级),真正卡脖子的只剩 u 单位一次路测标定;原始 vRel 缺口确认由 MPC 私有 CAN 设计使然,公开总线挖掘到此收口。**
+
+### 8.4 布局与工具变更
+- hour_logs_2 软链布局:`rlogs_flat/R{route}_{seg}.zst` → `radar_rlogs/<seg>/rlog.zst`(同 hour_logs 法);软链目录不入库。
+- `radar_hour_census.py`:load_all 加 Pool 并行 + `extract <logdir> [workers] <out.pkl>` 参数序;`radar_hour_mine.py`:加 `--cache`。控制路径与 dbc 零变更。
+
 
 数据:/tmp/hour_bus1.pkl(4 段全 bus1+监督)。工具:radar_hour_census.py(census+extract)、radar_hour_mine.py(5 通道挖掘)入库 tools/byd/。控制路径与 dbc 零变更。

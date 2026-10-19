@@ -74,8 +74,9 @@ def hf_vego(t, v, win_s=5.0):
 def main():
   ap = argparse.ArgumentParser()
   ap.add_argument("--top", type=int, default=25)
+  ap.add_argument("--cache", default="/tmp/hour_bus1.pkl")
   a = ap.parse_args()
-  C = pickle.load(open("/tmp/hour_bus1.pkl", "rb"))
+  C = pickle.load(open(a.cache, "rb"))
 
   agg = collections.defaultdict(lambda: collections.defaultdict(list))
   for seg, s in sorted(C.items()):

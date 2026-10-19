@@ -80,10 +80,15 @@ def parse_seg(f):
   return seg, out, hud, vego, accel
 
 
-def load_all(segs_paths):
+def load_all(segs_paths, workers=1):
+  if workers > 1:
+    from multiprocessing import Pool
+    with Pool(workers) as p:
+      results = p.map(parse_seg, segs_paths)
+  else:
+    results = [parse_seg(f) for f in segs_paths]
   cache = {}
-  for f in segs_paths:
-    seg, frames, hud, vego, accel = parse_seg(f)
+  for seg, frames, hud, vego, accel in results:
     cache[seg] = {"frames": frames, "hud": hud, "vego": vego, "accel": accel}
     print(f"{seg}: bus1 addrs={len(frames)} frames={sum(len(t) for t,_ in frames.values())} "
           f"hud={len(hud)} vego={len(vego)}", flush=True)
@@ -120,16 +125,29 @@ def census(cache):
 
 def main():
   mode, logdir = sys.argv[1], sys.argv[2]
+  # census <logdir> [workers] | extract <logdir> [workers] <out.pkl>
+  rest = sys.argv[3:]
+  workers = 1
+  out = None
+  if mode == "census" and rest:
+    workers = int(rest[0])
+  if mode == "extract":
+    if len(rest) == 1:
+      out = rest[0]
+    elif len(rest) >= 2:
+      workers, out = int(rest[0]), rest[1]
   segs = sorted(glob.glob(logdir + "/*/rlog.zst"))
   if not segs:
     sys.exit(f"no rlogs under {logdir}")
-  cache = load_all(segs)
+  if out is None and mode == "extract":
+    sys.exit("extract needs an output path: extract <logdir> [workers] <out.pkl>")
+  cache = load_all(segs, workers)
   if mode == "census":
     census(cache)
   else:
-    with open(sys.argv[3], "wb") as fp:
+    with open(out, "wb") as fp:
       pickle.dump(cache, fp)
-    print(f"cached -> {sys.argv[3]}")
+    print(f"cached -> {out}")
 
 
 if __name__ == "__main__":
