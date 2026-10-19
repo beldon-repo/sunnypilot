@@ -280,10 +280,11 @@ BO_ 852 RADAR_TRACK_354: 8 XXX
 ; The LongDist_109 unit u: hard upper bound u <= 0.42-0.44 from 13 stop-to-lead
 ; events in byd_logs_2026-10-05_07 (tools/byd/radar_stop2lead.py; per-window
 ; u <= D/delta_b7 holds since the lead cannot reverse) -> METERS 1.0 AND
-; 0.5/0.45 REFUTED. Surviving candidates: feet 0.3048 vs 0.25. Feet preferred
-; (bar-flip tau 0.87/1.24 s + offset 3.7 m plausible; stopped gap 15 counts ->
-; 4.6 m typical). Discriminator: measure the actual stop-to-lead gap once
-; (15c -> 4.6m = feet / 3.7m = 0.25). 0.3048 kept as factor, see CM_.
+; 0.5/0.45 REFUTED. Surviving candidates were feet 0.3048 vs 0.25. PINNED
+; 2026-10-19 by owner decision: u = 0.25 m/count (recalled real stop gap on the
+; 0.25 side: 15c -> 3.75 m; tau ladder {0.71,1.02,1.4} s, minor-gap shapes).
+; Derivatives: block-C x12 = 1/32 m, block-B = 1 dm, min b7=9 -> 2.25 m,
+; b7=246 top -> 61.5 m. Offline logs cannot tighten this further; see CM_.
 ; All non-HYPOTHESIS bytes are MSG_<frame>_B<n> raw placeholders (factor 1,
 ; offset 0) - no fabricated field formulas. Bit order is Motorola @0+ with
 ; MSB start bits (byte k = 8k..8k+7), whole byte k = (8k+7)|8@0+.
@@ -348,7 +349,7 @@ BO_ 265 RADAR_DIST_109: 8 XXX
  SG_ MSG_109_B4 : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ MSG_109_B5 : 47|8@0+ (1,0) [0|255] "" XXX
  SG_ MSG_109_B6 : 55|8@0+ (1,0) [0|255] "" XXX
- SG_ LongDist_109 : 63|8@0+ (0.3048,0) [0|75.3] "m" XXX
+ SG_ LongDist_109 : 63|8@0+ (0.25,0) [0|61.5] "m" XXX
 
 ; 0x10A: presence/companion frame. b3[7:5]==111 = forward target visible:
 ; agreement with HUD lead median 98.62% (p75=100%) over 415 segments,
@@ -369,6 +370,6 @@ CM_ BO_ 257 "transport retransmission twin of 0x105 (99.7-100 pct byte-identical
 CM_ BO_ 258 "sensor-health channel A (pair with 0x106); b4 slow physical quantity ~152 counts, meaning UNKNOWN - all bytes MSG placeholders";
 CM_ BO_ 261 "transport retransmission twin of 0x101 (see BO_ 257)";
 CM_ BO_ 262 "sensor-health channel B (pair with 0x102); b4 slow physical quantity ~103 counts, meaning UNKNOWN - all bytes MSG placeholders";
-CM_ BO_ 265 "HYPOTHESIS: LongDist_109 scale 0.3048 m/bit (feet) leading candidate of a TWO-way choice (feet vs 0.25): 13 stop-to-lead events in byd_logs_2026-10-05_07 give hard upper bound u<=0.42-0.44 (u<=D/delta_b7 per window, lead cannot reverse) -> METERS 1.0 AND 0.5/0.45 REFUTED; stopped-gap median 15 counts -> 4.6 m at feet (typical ACC) vs 3.7 m at 0.25. Discriminator: measure one real stop-to-lead gap. 247 suspected over-range sentinel, 0 = no target. Not consumed by any on-car CANParser.";
+CM_ BO_ 265 "PINNED 2026-10-19 (owner decision, recalled real stop gap): LongDist_109 scale u = 0.25 m/bit. Prior state: TWO-way choice (feet 0.3048 vs 0.25) with hard upper bound u<=0.42-0.44 from 13 stop-to-lead events in byd_logs_2026-10-05_07 (u<=D/delta_b7 per window, lead cannot reverse) -> METERS 1.0 AND 0.5/0.45 REFUTED; stopped-gap median 15 counts -> 3.75 m at 0.25 (4.6 m at feet). 247 = loss-edge transient, 0 = no target, continuous max 246 -> 61.5 m. Not consumed by any on-car CANParser.";
 CM_ BO_ 265 "block-wide: b0 MSG_10x_CheckSum = SAE J1850 CRC-8(poly 0x1D init 0xFF no-refl xorout 0xFF) over b1..b7 - CRACKED 2026-10-18, 100% on 2933 unique payloads + 80100/80100 different-day frames 101/102/106/109/10A; b1 MSG_10x_AliveCounter = rolling counter (low nibble +1/frame, high nibble ~8Hz carry); skip both when modeling";
 CM_ BO_ 266 "Presence_10A: value 7 (bits 111) = forward target visible; cross-segment agreement with HUD lead median 98.62 pct over 415 segments; remaining bits are MSG placeholders";

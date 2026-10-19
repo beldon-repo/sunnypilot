@@ -19,7 +19,7 @@ RETX_MSGS = (0x101, 0x105)      # pure transport retransmissions (99.7-100% iden
 HEALTH_MSGS = (0x102, 0x106)    # sensor-health A/B pair, all-MSG
 BLOCK_MSGS = RETX_MSGS + HEALTH_MSGS + (0x109, 0x10A)
 MSG_T_NS = int(1e9 / 25)        # block runs ~25 Hz on bus 1
-FEET = 0.3048                   # HYPOTHESIS scale, not pinned offline (see CM_ BO_ 265)
+SCALE = 0.25                    # u PINNED 2026-10-19 (owner decision): 0.25 m/count, see CM_ BO_ 265
 
 
 def feed(payloads: dict[int, bytes], addrs: tuple[int, ...] = BLOCK_MSGS, n: int = 30) -> CANParser:
@@ -35,14 +35,14 @@ def ramp(seed: int = 0) -> bytes:
 
 
 class TestLongDist109:
-  def test_is_byte7_scaled_by_hypothesis_feet(self):
-    # real mined values: 41 held steady 62 s in d3da5795a9--142, 247 = sentinel max,
-    # 0 = no target; per-bar global class means sit in the same range
+  def test_is_byte7_scaled_by_pinned_u(self):
+    # real mined values: 41 held steady 62 s in d3da5795a9--142, 247 = loss-edge
+    # transient, 0 = no target; per-bar global class means sit in the same range
     for raw in (0, 41, 139, 247):
       dat = bytearray(ramp())
       dat[7] = raw
       vl = feed({0x109: bytes(dat)}).vl[0x109]
-      assert vl["LongDist_109"] == pytest.approx(raw * FEET, abs=1e-9)
+      assert vl["LongDist_109"] == pytest.approx(raw * SCALE, abs=1e-9)
 
   def test_independent_of_bytes_below_b7(self):
     base = bytearray(ramp())
@@ -51,7 +51,7 @@ class TestLongDist109:
       for i in range(7):  # b0..b6 all move
         dat[i] = (dat[i] + 91 * seed) & 0xFF
       vl = feed({0x109: bytes(dat)}).vl[0x109]
-      assert vl["LongDist_109"] == pytest.approx(base[7] * FEET, abs=1e-9)
+      assert vl["LongDist_109"] == pytest.approx(base[7] * SCALE, abs=1e-9)
 
   def test_other_slots_decode_raw(self):
     dat = ramp(3)
