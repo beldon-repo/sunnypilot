@@ -325,10 +325,11 @@ class CarState(CarStateBase):
       return False, False
     updated = self.gap_cp.update(can_packets)
     fresh = 265 in updated
-    # dbc LongDist_109 carries the HYPOTHESIS feet factor; the monitor is
-    # u-free, so undo the scaling back to raw counts (docs §④b: unit pinned
-    # only by the road test - no meters anywhere in this path)
-    b7 = int(round(self.gap_cp.vl[265]["LongDist_109"] / 0.3048))
+    # b7 via the factor-1 MSG_109_B7 placeholder: the monitor is u-free and the
+    # dbc LongDist_109 scale is runtime-configurable (BydRadarDistScale), so the
+    # counts path must never depend on the scale factor (u pinned 0.25 m/count
+    # 2026-10-19; docs/byd-radar-010x.md ②/⑧)
+    b7 = int(self.gap_cp.vl[265]["MSG_109_B7"])
     presence = int(self.gap_cp.vl[266]["Presence_10A"])
     hud = self.adas_msg
     cls = int(hud.get("HasLead", 0)) * int(hud.get("LeadingDistance", 0))

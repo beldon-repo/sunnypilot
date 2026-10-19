@@ -164,6 +164,21 @@ class TestCarStateDecode:
     assert cs.gap_cp is not None
     assert cs.update_radar_gap([], 20.0) == (cs.gap_mon.closing, cs.gap_mon.new_target)
 
+  def test_b7_counts_scale_free(self):
+    # b7 comes from the factor-1 MSG_109_B7 placeholder, never from the
+    # LongDist_109 scaled signal: whatever BydRadarDistScale/dbc factor says,
+    # the monitor must see exact counts (u pinned 0.25 2026-10-19, tunable)
+    cs = self.make_cs()
+    b7, presence_bits = 123, 7
+    d9 = bytearray(8); d9[7] = b7
+    dA = bytearray(8); dA[3] = presence_bits << 5
+    cs.update_radar_gap([(0, [CanData(265, bytes(d9), 1), CanData(266, bytes(dA), 1)])], V)
+    vl = cs.gap_cp.vl[265]
+    assert int(vl["MSG_109_B7"]) == b7                 # exact counts, scale-free
+    assert vl["LongDist_109"] == b7 * 0.25             # pinned scale (dbc factor)
+    r_hist = cs.gap_mon._hist
+    assert r_hist and abs(r_hist[-1][1] - b7 / V) < 1e-9  # monitor sees raw counts
+
 
 def cs_state(**kw):
   d = dict(vEgo=25.0, leftBlinker=False, rightBlinker=False, steeringPressed=False,

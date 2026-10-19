@@ -350,6 +350,7 @@ BO_ 265 RADAR_DIST_109: 8 XXX
  SG_ MSG_109_B5 : 47|8@0+ (1,0) [0|255] "" XXX
  SG_ MSG_109_B6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ LongDist_109 : 63|8@0+ (0.25,0) [0|61.5] "m" XXX
+ SG_ MSG_109_B7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 ; 0x10A: presence/companion frame. b3[7:5]==111 = forward target visible:
 ; agreement with HUD lead median 98.62% (p75=100%) over 415 segments,

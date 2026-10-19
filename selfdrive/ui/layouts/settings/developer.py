@@ -1,8 +1,18 @@
 from openpilot.common.params import Params
 from openpilot.selfdrive.ui.widgets.ssh_key import ssh_key_item
+from openpilot.sunnypilot.common.raw_params import get_float_param, put_raw_param
 from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.widgets.list_view import toggle_item
+from openpilot.system.ui.widgets.list_view import multiple_button_item, toggle_item
 from openpilot.system.ui.widgets.scroller import Scroller
+
+# BYD 0x109 b7 distance scale u [m/count] (docs/byd-radar-010x.md ②; pinned 0.25
+# 2026-10-19 by owner decision, kept tunable for the road test). The gap monitor
+# is u-free (r=b7/vEgo counts space) and the b7 counts path reads the factor-1
+# MSG_109_B7 placeholder, so changing this can only affect future meters-side
+# consumers (track synthesis / distance display), never control behavior.
+RADAR_SCALE_PARAM = "BydRadarDistScale"
+RADAR_SCALE_DEFAULT = 0.25
+RADAR_SCALE_CHOICES = [0.20, 0.25, 0.3048, 0.30]
 
 # Description constants
 DESCRIPTIONS = {
@@ -48,6 +58,19 @@ class DeveloperLayout(Widget):
         initial_state=self._params.get_bool("AlphaLongitudinalEnabled"),
         callback=self._on_alpha_long_enabled,
       ),
+      multiple_button_item(
+        "BYD Radar Distance Scale",
+        description=(
+          "Distance scale u (meters per radar count) for the BYD 0x109 b7 field. "
+          "Pinned at 0.25 m/count; adjust only if a measured stop-to-lead gap "
+          "disagrees. Lane-change gap gating is scale-free and unaffected."
+        ),
+        buttons=[f"{u:g} m" for u in RADAR_SCALE_CHOICES],
+        button_width=255,
+        callback=self._on_radar_scale,
+        selected_index=self._radar_scale_index(),
+        icon="speed_limit.png",
+      ),
     ]
 
     self._scroller = Scroller(items, line_separator=True, spacing=0)
@@ -59,3 +82,10 @@ class DeveloperLayout(Widget):
   def _on_joystick_debug_mode(self): pass
   def _on_long_maneuver_mode(self): pass
   def _on_alpha_long_enabled(self): pass
+
+  def _radar_scale_index(self) -> int:
+    u = get_float_param(self._params, RADAR_SCALE_PARAM, RADAR_SCALE_DEFAULT)
+    return min(range(len(RADAR_SCALE_CHOICES)), key=lambda i: abs(RADAR_SCALE_CHOICES[i] - u))
+
+  def _on_radar_scale(self, button_index: int):
+    put_raw_param(self._params, RADAR_SCALE_PARAM, RADAR_SCALE_CHOICES[button_index])

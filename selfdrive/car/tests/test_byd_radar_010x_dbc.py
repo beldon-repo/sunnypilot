@@ -61,6 +61,17 @@ class TestLongDist109:
     for i in range(2, 7):
       assert vl[f"MSG_109_B{i}"] == dat[i]           # placeholders stay factor-1 raw
 
+  def test_raw_b7_twin_is_scale_free(self):
+    # MSG_109_B7 shares b7 with LongDist_109 at factor 1: the counts path
+    # (carstate.update_radar_gap -> RadarGapMonitor) must never see the
+    # configurable scale (BydRadarDistScale), whatever it is set to
+    for raw in (0, 15, 139, 247):
+      dat = bytearray(ramp())
+      dat[7] = raw
+      vl = feed({0x109: bytes(dat)}).vl[0x109]
+      assert vl["MSG_109_B7"] == raw
+      assert vl["LongDist_109"] == pytest.approx(raw * SCALE, abs=1e-9)
+
 
 class TestPresence10A:
   def test_b3_top3_bits(self):

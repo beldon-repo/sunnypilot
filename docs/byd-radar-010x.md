@@ -93,6 +93,12 @@
 - **9-28 新地址登记**:0x100(10Hz)/0x103/104/107/108(0x10x 伴生)/0x302/0x350-354(tangdm 槽位非恒空但 track 全 0 填充不变)/0x569——五通道扫描均无监督信号,登记不动;0x35x 与 0x10x 内容不同源(帧差 64/96 LSB)。
 - 控制路径与 dbc 零变更;差分 b7 作 vRel 代理的风险#4 定性维持(hour_logs closing 仅 125 帧,不足以再标定)。
 
+## ⑨ u 参数化(BydRadarDistScale)+b7 计数路径解耦(2026-10-19)
+
+- **u=0.25 钉死同日,owner 要求留运行时可调口**:`BydRadarDistScale` raw param(默认 0.25,UI Developer 面板按钮组 0.20/0.25/0.3048/0.30,写路径走 `put_raw_param` raw 文件——设备 params_pyx.so 未注册该 key 也可用,先例 LaneChangeAssistSpeed/BydRadarGapGate);`raw_params.py` 新增 `get_float_param`/`put_raw_param` 通用 helper。
+- **连带发现并修复 carstate 一致性 bug**:`update_radar_gap` 原先 `LongDist_109 / 0.3048` 还原计数——factor 改 0.25 后会得 0.82× 错位计数(gap 测试在 mac 因 params_pyx 无法运行而漏网);修复=b7 改走 dbc 新增的 **factor-1 `MSG_109_B7` raw 孪生信号**(与 B5/B6 占位同风格、与 LongDist_109 同位并存),计数路径与任何 scale 永久解耦——u 只影响米制侧(LongDist_109 解码值/未来 track 合成/距离显示),**RadarGapMonitor 的 r=b7/vEgo counts 空间对 u 的任何调整零响应**。
+- 测试:010x dbc 套件 11/11(mac,新增 raw twin scale-free 断言);gap 套件新增 `test_b7_counts_scale_free`(mac 环境跑不了 params_pyx 链,设备/host-runner 侧执行);mac 冒烟:MSG_109_B7=15 精确、LongDist_109=3.75、端到端 closing 序列触发 ✓。
+
 ## 证据链(416 段报告 + 三方审查)
 - **档位单调分离**:113/415 段含全三档(≥50 帧),0x109 b7 跨段 mean(c4)>mean(c3)>mean(c2) 严格占 90.3%(102/113);类均值 c0/c2/c3/c4 = 1.35/31.2/49.7/112.9。同项 0x101 b7 仅 24.8%、c0 均值 30.6 非零——0x101 b7 不是该距离字段。
 - **无目标归零**:0x109 b7 class-0 零率 96.3%(279985/290824),f8_8/f9_12 整段恒 0(uniq=1)——时间滚动计数器不可能;残留 3.7%(10839 帧,max 247)为捕获/丢失瞬态。
